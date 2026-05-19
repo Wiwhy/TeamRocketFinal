@@ -8,42 +8,35 @@ unsigned int localPort = 8080;
 WiFiEspUDP Udp;
 
 // ==========================================
-// PINES DE LAS 4 RUEDAS (MECANUM)
+// PINES MODO TANQUE (Cableado por Lados)
 // ==========================================
-#define speedPinR 9
-#define RightMotorDirPin1  22
-#define RightMotorDirPin2  24
+// LADO IZQUIERDO -> Conectados a BK1 y BK2 (Pines D22, D24, PWM D9)
+#define MotorIzq_Dir1 22
+#define MotorIzq_Dir2 24
+#define MotorIzq_PWM  9
 
-#define LeftMotorDirPin1  26
-#define LeftMotorDirPin2  28
-#define speedPinL 10
-
-#define speedPinRB 11
-#define RightMotorDirPin1B  5
-#define RightMotorDirPin2B 6
-
-#define LeftMotorDirPin1B 7
-#define LeftMotorDirPin2B 8
-#define speedPinLB 12
+// LADO DERECHO -> Conectados a BK3 y BK4 (Pines D26, D28, PWM D10)
+#define MotorDer_Dir1 26
+#define MotorDer_Dir2 28
+#define MotorDer_PWM  10
 
 // ==========================================
-// PINES DEL NUEVO MOTOR (LA PINZA)
+// PINES DE LA PINZA -> Conectada a AK1 o AK2
+// (Pines D5, D6, PWM D11)
 // ==========================================
-#define PinzaDir1 30
-#define PinzaDir2 32
-#define PinzaPWM 4
+#define PinzaDir1 5
+#define PinzaDir2 6
+#define PinzaPWM  11
 
-#define VELOCIDAD_PINZA 150 // Velocidad segura para no romper la mecánica
+#define VELOCIDAD_PINZA 150 // Fuerza de la pinza (0-255)
 
 // ==========================================
-// VARIABLES DE MOVIMIENTO
+// VARIABLES DE DATOS
 // ==========================================
-int cur_fl = 0, target_fl = 0;
-int cur_fr = 0, target_fr = 0;
-int cur_bl = 0, target_bl = 0;
-int cur_br = 0, target_br = 0;
-
-int target_pinza = 0; // 1 (Cerrar), -1 (Abrir), 0 (Quieto)
+int cur_izq = 0, target_izq = 0;
+int cur_der = 0, target_der = 0;
+int basura1 = 0, basura2 = 0; 
+int target_pinza = 0; 
 
 unsigned long last_millis = 0; 
 
@@ -51,145 +44,87 @@ void setup() {
   Serial.begin(115200);   
   Serial1.begin(115200);  
 
-  // Inicializar pines de ruedas
-  pinMode(RightMotorDirPin1, OUTPUT); pinMode(RightMotorDirPin2, OUTPUT); pinMode(speedPinL, OUTPUT);
-  pinMode(LeftMotorDirPin1, OUTPUT); pinMode(LeftMotorDirPin2, OUTPUT); pinMode(speedPinR, OUTPUT);
-  pinMode(RightMotorDirPin1B, OUTPUT); pinMode(RightMotorDirPin2B, OUTPUT); pinMode(speedPinLB, OUTPUT);
-  pinMode(LeftMotorDirPin1B, OUTPUT); pinMode(LeftMotorDirPin2B, OUTPUT); pinMode(speedPinRB, OUTPUT);
+  pinMode(MotorIzq_Dir1, OUTPUT); pinMode(MotorIzq_Dir2, OUTPUT); pinMode(MotorIzq_PWM, OUTPUT);
+  pinMode(MotorDer_Dir1, OUTPUT); pinMode(MotorDer_Dir2, OUTPUT); pinMode(MotorDer_PWM, OUTPUT);
+  
+  pinMode(PinzaDir1, OUTPUT); pinMode(PinzaDir2, OUTPUT); pinMode(PinzaPWM, OUTPUT);
 
-  // Inicializar pines de la pinza
-  pinMode(PinzaDir1, OUTPUT);
-  pinMode(PinzaDir2, OUTPUT);
-  pinMode(PinzaPWM, OUTPUT);
-
-  apagar_motores();
+  apagar_todo();
 
   WiFi.init(&Serial1);
   WiFi.beginAP(ssid, 10, pass, ENC_TYPE_WPA2_PSK);
   Udp.begin(localPort);
-  Serial.println("¡Mecanum 360 + Pinzas listo! Esperando órdenes...");
+  Serial.println("¡Modo Tanque + Pinzas en AK listo! Esperando órdenes...");
 }
 
 void loop() {
-  // 1. LEER EL PAQUETE DE DATOS DE PYTHON (Ejemplo: "150,-100,150,-100,1")
   int packetSize = Udp.parsePacket();
   if (packetSize) {
     char packetBuffer[64];
     int len = Udp.read(packetBuffer, 63);
-    if (len > 0) {
-      packetBuffer[len] = '\0'; // Cerrar el texto
-    }
+    if (len > 0) packetBuffer[len] = '\0';
     
-    // Extraer los 5 números (4 ruedas + 1 pinza)
-    sscanf(packetBuffer, "%d,%d,%d,%d,%d", &target_fl, &target_fr, &target_bl, &target_br, &target_pinza);
+    // Leemos los 5 números: Izquierda, Derecha, 0, 0, Pinza
+    sscanf(packetBuffer, "%d,%d,%d,%d,%d", &target_izq, &target_der, &basura1, &basura2, &target_pinza);
   }
 
-  // 2. LA FÍSICA DE MOVIMIENTO (Se ejecuta cada 10ms)
   if (millis() - last_millis >= 10) { 
     last_millis = millis();
 
-    // Suavizado para las ruedas
-    suavizar_rueda(cur_fl, target_fl);
-    suavizar_rueda(cur_fr, target_fr);
-    suavizar_rueda(cur_bl, target_bl);
-    suavizar_rueda(cur_br, target_br);
+    suavizar_rueda(cur_izq, target_izq);
+    suavizar_rueda(cur_der, target_der);
 
-    // 3. APLICAR POTENCIA A LOS MOTORES
-    aplicarMotor(1, cur_fl); // Frontal Izquierdo
-    aplicarMotor(2, cur_fr); // Frontal Derecho
-    aplicarMotor(3, cur_bl); // Trasero Izquierdo
-    aplicarMotor(4, cur_br); // Trasero Derecho
+    aplicarMotorTanque(1, cur_izq); 
+    aplicarMotorTanque(2, cur_der); 
     
-    // 4. APLICAR POTENCIA A LA PINZA
     aplicarPinza(target_pinza);
   }
 }
 
 // =========================================================
-// LÓGICA DE LA PINZA
-// =========================================================
 void aplicarPinza(int estado) {
-  if (estado == 1) {
-    // CERRAR PINZA (Botón X pulsado)
-    digitalWrite(PinzaDir1, HIGH);
-    digitalWrite(PinzaDir2, LOW);
-    analogWrite(PinzaPWM, VELOCIDAD_PINZA);
-  } 
-  else if (estado == -1) {
-    // ABRIR PINZA (Botón Círculo pulsado)
-    digitalWrite(PinzaDir1, LOW);
-    digitalWrite(PinzaDir2, HIGH);
-    analogWrite(PinzaPWM, VELOCIDAD_PINZA);
-  } 
-  else {
-    // QUIETO (Ningún botón o los dos a la vez)
-    digitalWrite(PinzaDir1, LOW);
-    digitalWrite(PinzaDir2, LOW);
-    analogWrite(PinzaPWM, 0);
+  if (estado == 1) { // Cerrar
+    digitalWrite(PinzaDir1, HIGH); digitalWrite(PinzaDir2, LOW); analogWrite(PinzaPWM, VELOCIDAD_PINZA);
+  } else if (estado == -1) { // Abrir
+    digitalWrite(PinzaDir1, LOW); digitalWrite(PinzaDir2, HIGH); analogWrite(PinzaPWM, VELOCIDAD_PINZA);
+  } else { // Quieto
+    digitalWrite(PinzaDir1, LOW); digitalWrite(PinzaDir2, LOW); analogWrite(PinzaPWM, 0);
   }
 }
 
-// =========================================================
-// LÓGICA DE FRENADO EN SECO Y ACELERACIÓN SUAVE (RUEDAS)
 // =========================================================
 void suavizar_rueda(int &current, int target) {
-  // CASO 1: Si soltamos el mando (0) o cambiamos de sentido bruscamente -> FRENAMOS EN SECO
   if (target == 0 || (current > 0 && target < 0) || (current < 0 && target > 0)) {
-    current = target;
-    return;
+    current = target; return;
   }
+  if (abs(target) < abs(current)) { current = target; return; }
   
-  // CASO 2: Si estamos reduciendo la velocidad (pero sin llegar a 0) -> FRENAMOS EN SECO
-  if (abs(target) < abs(current)) {
-    current = target;
-    return;
-  }
-
-  // CASO 3: Si estamos ACELERANDO -> SUAVIZAMOS
   if (current < target) {
-    current += 8; // Aceleración hacia adelante
-    if (current > target) current = target;
-  } 
-  else if (current > target) {
-    current -= 8; // Aceleración hacia atrás
-    if (current < target) current = target;
+    current += 8; if (current > target) current = target;
+  } else if (current > target) {
+    current -= 8; if (current < target) current = target;
   }
 }
 
 // =========================================================
-// CONTROL INDIVIDUAL DE MOTORES (RUEDAS)
-// =========================================================
-void aplicarMotor(int motor, int velocidad) {
+void aplicarMotorTanque(int lado, int velocidad) {
   bool hacia_adelante = (velocidad >= 0);
   int pwm = abs(velocidad);
   if (pwm > 255) pwm = 255;
 
-  switch(motor) {
-    case 1: // FL
-      digitalWrite(LeftMotorDirPin1, hacia_adelante ? LOW : HIGH);
-      digitalWrite(LeftMotorDirPin2, hacia_adelante ? HIGH : LOW);
-      analogWrite(speedPinL, pwm);
-      break;
-    case 2: // FR
-      digitalWrite(RightMotorDirPin1, hacia_adelante ? LOW : HIGH);
-      digitalWrite(RightMotorDirPin2, hacia_adelante ? HIGH : LOW);
-      analogWrite(speedPinR, pwm);
-      break;
-    case 3: // BL
-      digitalWrite(LeftMotorDirPin1B, hacia_adelante ? LOW : HIGH);
-      digitalWrite(LeftMotorDirPin2B, hacia_adelante ? HIGH : LOW);
-      analogWrite(speedPinLB, pwm);
-      break;
-    case 4: // BR
-      digitalWrite(RightMotorDirPin1B, hacia_adelante ? LOW : HIGH);
-      digitalWrite(RightMotorDirPin2B, hacia_adelante ? HIGH : LOW);
-      analogWrite(speedPinRB, pwm);
-      break;
+  if (lado == 1) { // LADO IZQUIERDO
+    digitalWrite(MotorIzq_Dir1, hacia_adelante ? LOW : HIGH);
+    digitalWrite(MotorIzq_Dir2, hacia_adelante ? HIGH : LOW);
+    analogWrite(MotorIzq_PWM, pwm);
+  } else { // LADO DERECHO
+    digitalWrite(MotorDer_Dir1, hacia_adelante ? LOW : HIGH);
+    digitalWrite(MotorDer_Dir2, hacia_adelante ? HIGH : LOW);
+    analogWrite(MotorDer_PWM, pwm);
   }
 }
 
-void apagar_motores() {
-  target_fl = 0; target_fr = 0; target_bl = 0; target_br = 0;
-  aplicarMotor(1, 0); aplicarMotor(2, 0); aplicarMotor(3, 0); aplicarMotor(4, 0);
+void apagar_todo() {
+  target_izq = 0; target_der = 0;
+  aplicarMotorTanque(1, 0); aplicarMotorTanque(2, 0);
   aplicarPinza(0);
 }
