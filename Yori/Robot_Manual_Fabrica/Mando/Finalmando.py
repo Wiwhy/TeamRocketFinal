@@ -22,7 +22,7 @@ DEADZONE = 0.2
 # ==========================================
 # LA CAJA DE CAMBIOS
 # ==========================================
-marchas      = [   80,   130,   190,   255  ]
+marchas      = [   80,   110,   170,   255  ]
 nombres      = ["LENTA", "BASE", "RÁPIDA", "TURBO"]
 indice_marcha = 1  
 
