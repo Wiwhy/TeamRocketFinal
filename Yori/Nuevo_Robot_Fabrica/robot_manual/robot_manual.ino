@@ -40,7 +40,7 @@ unsigned long last_millis = 0;
 
 void setup() {
   Serial.begin(115200);   
-  Serial1.begin(115200);
+  Serial1.begin(9600);
 
   pinMode(RightMotorDirPin1, OUTPUT); pinMode(RightMotorDirPin2, OUTPUT); pinMode(speedPinR, OUTPUT);
   pinMode(LeftMotorDirPin1, OUTPUT);  pinMode(LeftMotorDirPin2, OUTPUT);  pinMode(speedPinL, OUTPUT);
