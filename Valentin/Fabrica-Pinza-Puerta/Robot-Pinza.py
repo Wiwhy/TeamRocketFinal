@@ -18,17 +18,12 @@ mando.init()
 print(f"Mando: {mando.get_name()} | Conexión establecida.")
 
 DEADZONE = 0.2 
-
-# ==========================================
-# LA CAJA DE CAMBIOS
-# ==========================================
-marchas      = [   80,   110,   170,   255  ]
-nombres      = ["LENTA", "BASE", "RÁPIDA", "TURBO"]
+marchas       = [   80,   110,   170,   255  ]
+nombres       = ["LENTA", "BASE", "RÁPIDA", "TURBO"]
 indice_marcha = 1  
 
 print(f"Iniciando en >> MODO {nombres[indice_marcha]} ({marchas[indice_marcha]}/255)")
 
-# Variables para evitar que el botón haga "spam" por Wi-Fi
 estado_abrir_ant = False
 estado_cerrar_ant = False
 
@@ -36,14 +31,13 @@ try:
     while True:
         pygame.event.pump()
         
-        # --- LECTURA DE LOS JOYSTICKS (INVERTIDOS) ---
+        # --- MOVIMIENTO ---
         y = mando.get_axis(1)   
         r = -mando.get_axis(2)  
-
         if abs(y) < DEADZONE: y = 0
         if abs(r) < DEADZONE: r = 0
 
-        # --- LECTURA DE CAJA DE CAMBIOS ---
+        # --- CAJA DE CAMBIOS ---
         try:
             l2_val = mando.get_axis(4) 
             r2_val = mando.get_axis(5) 
@@ -60,18 +54,16 @@ try:
 
         if nuevo_indice != indice_marcha:
             indice_marcha = nuevo_indice
-            print(f">> CAMBIO A: MODO {nombres[indice_marcha]} ({marchas[indice_marcha]}/255)")
+            print(f">> CAMBIO A: MODO {nombres[indice_marcha]}")
 
-        # ==========================================
-        # LÓGICA DE LA PUERTA (CRUCETA) - NUEVO
-        # ==========================================
+        # --- LÓGICA DE LA PUERTA (CRUCETAS) ---
         btn_abrir = False
         btn_cerrar = False
         try:
             if mando.get_numhats() > 0:
                 cruceta = mando.get_hat(0)
-                if cruceta[1] == 1: btn_abrir = True    # Flecha Arriba
-                elif cruceta[1] == -1: btn_cerrar = True # Flecha Abajo
+                if cruceta[1] == 1: btn_abrir = True    # Arriba
+                elif cruceta[1] == -1: btn_cerrar = True # Abajo
         except:
             pass
             
@@ -86,7 +78,7 @@ try:
         estado_abrir_ant = btn_abrir
         estado_cerrar_ant = btn_cerrar
 
-        # --- LÓGICA DE LAS PINZAS ---
+        # --- PINZA ---
         try:
             btn_x = mando.get_button(0)       
             btn_circulo = mando.get_button(1) 
@@ -97,21 +89,18 @@ try:
         if btn_x and not btn_circulo: estado_pinza = 1  
         elif btn_circulo and not btn_x: estado_pinza = -1 
 
-        # --- MATEMÁTICAS MODO TANQUE ---
+        # --- MATEMÁTICAS MOTORES ---
         velocidad_actual = marchas[indice_marcha]
-
         val_izq = y + r  
         val_der = y - r  
-
         max_val = max(abs(val_izq), abs(val_der), 1.0)
         
         motor_izq = int((val_izq / max_val) * velocidad_actual)
         motor_der = int((val_der / max_val) * velocidad_actual)
 
-        # Enviamos: Izquierda, Derecha, 0, 0, Pinza
+        # Enviar telemetría
         paquete = f"{motor_izq},{motor_der},0,0,{estado_pinza}\n".encode()
         sock.sendto(paquete, (ROBOT_IP, PORT))
-        
         time.sleep(0.02) 
 
 except KeyboardInterrupt:
