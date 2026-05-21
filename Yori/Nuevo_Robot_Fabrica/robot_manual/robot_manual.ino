@@ -7,9 +7,9 @@ int status = WL_IDLE_STATUS;
 unsigned int localPort = 8080; // Puerto donde escucha al PC
 WiFiEspUDP Udp;
 
-// CONFIGURACIÓN CAMBIADA: Ahora dispara directo a la IP fija de la puerta
-IPAddress ipPuertaFija(192, 168, 4, 10);
-unsigned int puertoPuerta = 8081;        
+// CONFIGURACIÓN COMUNICACIÓN PUERTA
+IPAddress ipBroadcast(192, 168, 4, 255);
+unsigned int puertoPuerta = 8081;
 
 // Pines de las 4 ruedas (Mecanum Modo Tanque)
 #define speedPinR 9
@@ -64,19 +64,18 @@ void loop() {
     int len = Udp.read(packetBuffer, 63);
     if (len > 0) packetBuffer[len] = '\0';
     
-    // REENVIAR COMANDOS DIRECTOS A LA IP DE LA PUERTA
-    if (strncmp(packetBuffer, "PUERTA_ABRIR", 12) == 0) {
-      Serial.println(">>> Enviando orden de apertura DIRECTA a 192.168.4.10...");
-      Udp.beginPacket(ipPuertaFija, puertoPuerta);
+   if (strncmp(packetBuffer, "PUERTA_ABRIR", 12) == 0) {
+      Serial.println(">>> Enviando orden de apertura (Broadcast)...");
+      Udp.beginPacket(ipBroadcast, puertoPuerta);
       Udp.write("ABRIR");
       Udp.endPacket();
     } 
     else if (strncmp(packetBuffer, "PUERTA_CERRAR", 13) == 0) {
-      Serial.println(">>> Enviando orden de cierre DIRECTA a 192.168.4.10...");
-      Udp.beginPacket(ipPuertaFija, puertoPuerta);
+      Serial.println(">>> Enviando orden de cierre (Broadcast)...");
+      Udp.beginPacket(ipBroadcast, puertoPuerta);
       Udp.write("CERRAR");
       Udp.endPacket();
-    } 
+    }
     else {
       sscanf(packetBuffer, "%d,%d,%d,%d,%d", &target_fl, &target_fr, &target_bl, &target_br, &target_pinza);
     }
