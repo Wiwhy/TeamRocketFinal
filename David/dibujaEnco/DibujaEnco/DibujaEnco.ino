@@ -27,13 +27,14 @@ WiFiEspUDP Udp;
 #define RightMotorDirPin1B 5
 #define RightMotorDirPin2B 6
 
+// Contadores en memoria ultrarrápida
 volatile long ticks_FL = 0;
 volatile long ticks_FR = 0;
 volatile long ticks_BL = 0;
 volatile long ticks_BR = 0;
 bool emergencia_activa = false;
 
-// Variables configurables por Wi-Fi
+// Variables configurables por Wi-Fi (Memoria Buffer)
 int figura_activa = 1;
 int global_pwm = 150;
 int tiempo_pausa = 500;
@@ -43,6 +44,7 @@ long tk_tri = 1000;
 float tri_r1 = 26.8, tri_r2 = 26.8;
 float lat_fl = 100.0, lat_fr = 100.0, lat_bl = 100.0, lat_br = 100.0;
 
+// Rutinas de interrupción
 void contar_FL() { ticks_FL++; }
 void contar_FR() { ticks_FR++; }
 void contar_BL() { ticks_BL++; }
@@ -62,11 +64,13 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_ENC_BL_INT), contar_BL, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENC_BR_INT), contar_BR, CHANGE);
 
-  detenerTodos();
+  liberarMotores();
   Serial.begin(115200); Serial1.begin(115200);  
   WiFi.init(&Serial1);
   WiFi.beginAP(ssid, 10, pass, ENC_TYPE_WPA2_PSK);
   Udp.begin(localPort);
+  
+  Serial.println(F("Sistema optimizado con Frenado Activo. Listo."));
 }
 
 void loop() {
@@ -83,7 +87,9 @@ void revisarTelemetria() {
       
       if (packetBuffer[0] == 'S') {
         emergencia_activa = true;
-        detenerTodos();
+        frenarTodos();
+        delay(50);
+        liberarMotores();
       } 
       else if (packetBuffer[0] == 'C') {
         char *token = strtok(packetBuffer, ",");
@@ -113,45 +119,46 @@ void revisarTelemetria() {
 }
 
 // ========================================================
-// === CONTROL ODOMÉTRICO MATRICIAL DE ALTA PRECISIÓN ===
+// == CONTROL ODOMÉTRICO MATRICIAL OPTIMIZADO (FRENADO) ===
 // ========================================================
 void avanzarIndependiente(long tFL, long tFR, long tBL, long tBR, int pFL, int pFR, int pBL, int pBR) {
   ticks_FL = 0; ticks_FR = 0; ticks_BL = 0; ticks_BR = 0;
   bool doneFL = (tFL == 0), doneFR = (tFR == 0), doneBL = (tBL == 0), doneBR = (tBR == 0);
+  
+  unsigned long ultimo_chequeo_wifi = 0;
+
+  // Arrancar todos los motores en estricto simultáneo antes de entrar al bucle
+  if (!doneFL) aplicarPotenciaDriver(0, pFL, (tFL > 0) ? 1 : -1);
+  if (!doneFR) aplicarPotenciaDriver(1, pFR, (tFR > 0) ? 1 : -1);
+  if (!doneBL) aplicarPotenciaDriver(2, pBL, (tBL > 0) ? 1 : -1);
+  if (!doneBR) aplicarPotenciaDriver(3, pBR, (tBR > 0) ? 1 : -1);
 
   // El bucle se mantiene vivo hasta que LAS 4 ruedas alcanzan sus objetivos o se pulsa Stop.
   while (!emergencia_activa && (!doneFL || !doneFR || !doneBL || !doneBR)) {
-    revisarTelemetria(); 
-    if (emergencia_activa) break;
+    
+    // Revisamos Wi-Fi cada 100ms para liberar al procesador
+    if (millis() - ultimo_chequeo_wifi > 100) {
+        revisarTelemetria(); 
+        ultimo_chequeo_wifi = millis();
+        if (emergencia_activa) break;
+    }
 
-    // Rueda 1: Evalúa, aplica PWM y frena instantáneamente al llegar
-    if (!doneFL) {
-      if (abs(ticks_FL) >= abs(tFL)) { apagarMotor(0); doneFL = true; }
-      else { aplicarPotenciaDriver(0, pFL, (tFL > 0) ? 1 : -1); }
-    }
-    // Rueda 2
-    if (!doneFR) {
-      if (abs(ticks_FR) >= abs(tFR)) { apagarMotor(1); doneFR = true; }
-      else { aplicarPotenciaDriver(1, pFR, (tFR > 0) ? 1 : -1); }
-    }
-    // Rueda 3
-    if (!doneBL) {
-      if (abs(ticks_BL) >= abs(tBL)) { apagarMotor(2); doneBL = true; }
-      else { aplicarPotenciaDriver(2, pBL, (tBL > 0) ? 1 : -1); }
-    }
-    // Rueda 4
-    if (!doneBR) {
-      if (abs(ticks_BR) >= abs(tBR)) { apagarMotor(3); doneBR = true; }
-      else { aplicarPotenciaDriver(3, pBR, (tBR > 0) ? 1 : -1); }
-    }
+    // Monitoreo individual y FRENADO ACTIVO INMEDIATO
+    if (!doneFL && abs(ticks_FL) >= abs(tFL)) { apagarMotorActivo(0); doneFL = true; }
+    if (!doneFR && abs(ticks_FR) >= abs(tFR)) { apagarMotorActivo(1); doneFR = true; }
+    if (!doneBL && abs(ticks_BL) >= abs(tBL)) { apagarMotorActivo(2); doneBL = true; }
+    if (!doneBR && abs(ticks_BR) >= abs(tBR)) { apagarMotorActivo(3); doneBR = true; }
   }
-  detenerTodos();
+  
+  // Liberación de tensión tras frenar (Evita consumo y sobrecalentamiento)
+  delay(50);
+  liberarMotores();
 }
 
 void pausaMecanica(int tiempo) {
   unsigned long inicio = millis();
   while (millis() - inicio < tiempo) {
-    revisarTelemetria();
+    if (millis() - inicio % 100 == 0) revisarTelemetria(); 
     if (emergencia_activa) break;
   }
 }
@@ -160,68 +167,55 @@ void pausaMecanica(int tiempo) {
 // ================== FIGURAS GEOMÉTRICAS =================
 // ========================================================
 void dibujarTriangulo() {
-  // Lado 1: Adelante
   avanzarIndependiente(tk_tri, tk_tri, tk_tri, tk_tri, global_pwm, global_pwm, global_pwm, global_pwm);
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // Lado 2: Diagonal Atrás-Derecha (Giro 1)
   long tk_lenta1 = tk_tri * (tri_r1 / 100.0);
   int pwm_lenta1 = global_pwm * (tri_r1 / 100.0);
-  // FL y BR van atrás (Rápidas 100%). FR y BL van adelante (Lentas %).
   avanzarIndependiente(-tk_tri, tk_lenta1, tk_lenta1, -tk_tri, global_pwm, pwm_lenta1, pwm_lenta1, global_pwm);
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // Lado 3: Diagonal Atrás-Izquierda (Giro 2)
   long tk_lenta2 = tk_tri * (tri_r2 / 100.0);
   int pwm_lenta2 = global_pwm * (tri_r2 / 100.0);
-  // FR y BL van atrás (Rápidas 100%). FL y BR van adelante (Lentas %).
   avanzarIndependiente(tk_lenta2, -tk_tri, -tk_tri, tk_lenta2, pwm_lenta2, global_pwm, global_pwm, pwm_lenta2);
 }
 
 void dibujarCuadrado() {
-  // L1: Adelante
   avanzarIndependiente(tk_c_recto, tk_c_recto, tk_c_recto, tk_c_recto, global_pwm, global_pwm, global_pwm, global_pwm);
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // L2: Derecha (Aplica la corrección de deriva a las velocidades)
   avanzarIndependiente(tk_c_lat, -tk_c_lat, -tk_c_lat, tk_c_lat,
                        global_pwm * (lat_fl/100.0), global_pwm * (lat_fr/100.0),
                        global_pwm * (lat_bl/100.0), global_pwm * (lat_br/100.0));
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // L3: Atrás
   avanzarIndependiente(-tk_c_recto, -tk_c_recto, -tk_c_recto, -tk_c_recto, global_pwm, global_pwm, global_pwm, global_pwm);
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // L4: Izquierda (Aplica la corrección de deriva a las velocidades)
   avanzarIndependiente(-tk_c_lat, tk_c_lat, tk_c_lat, -tk_c_lat,
                        global_pwm * (lat_fl/100.0), global_pwm * (lat_fr/100.0),
                        global_pwm * (lat_bl/100.0), global_pwm * (lat_br/100.0));
 }
 
 void dibujarRectangulo() {
-  // L1: Adelante (Largo)
   avanzarIndependiente(tk_r_recto, tk_r_recto, tk_r_recto, tk_r_recto, global_pwm, global_pwm, global_pwm, global_pwm);
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // L2: Derecha (Corto)
   avanzarIndependiente(tk_r_lat, -tk_r_lat, -tk_r_lat, tk_r_lat,
                        global_pwm * (lat_fl/100.0), global_pwm * (lat_fr/100.0),
                        global_pwm * (lat_bl/100.0), global_pwm * (lat_br/100.0));
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // L3: Atrás (Largo)
   avanzarIndependiente(-tk_r_recto, -tk_r_recto, -tk_r_recto, -tk_r_recto, global_pwm, global_pwm, global_pwm, global_pwm);
   if(emergencia_activa) return; pausaMecanica(tiempo_pausa);
 
-  // L4: Izquierda (Corto)
   avanzarIndependiente(-tk_r_lat, tk_r_lat, tk_r_lat, -tk_r_lat,
                        global_pwm * (lat_fl/100.0), global_pwm * (lat_fr/100.0),
                        global_pwm * (lat_bl/100.0), global_pwm * (lat_br/100.0));
 }
 
 // ========================================================
-// === CONTROL HARDWARE L298N (Direcciones Reales) ========
+// === CONTROL HARDWARE L298N (Frenado Activo) ============
 // ========================================================
 void aplicarPotenciaDriver(int motorIndex, int pwm, int direccion) {
   bool p1 = (direccion == 1) ? LOW : HIGH;
@@ -234,15 +228,22 @@ void aplicarPotenciaDriver(int motorIndex, int pwm, int direccion) {
   }
 }
 
-void apagarMotor(int motorIndex) {
+void apagarMotorActivo(int motorIndex) {
+  // Frenado Dinámico (Cortocircuito en H-Bridge)
   switch(motorIndex) {
-    case 0: analogWrite(speedPinL, 0); break;
-    case 1: analogWrite(speedPinR, 0); break;
-    case 2: analogWrite(speedPinLB, 0); break;
-    case 3: analogWrite(speedPinRB, 0); break;
+    case 0: digitalWrite(LeftMotorDirPin1, HIGH);  digitalWrite(LeftMotorDirPin2, HIGH);  analogWrite(speedPinL, 255);  break;
+    case 1: digitalWrite(RightMotorDirPin1, HIGH); digitalWrite(RightMotorDirPin2, HIGH); analogWrite(speedPinR, 255);  break;
+    case 2: digitalWrite(LeftMotorDirPin1B, HIGH);  digitalWrite(LeftMotorDirPin2B, HIGH);  analogWrite(speedPinLB, 255); break;
+    case 3: digitalWrite(RightMotorDirPin1B, HIGH); digitalWrite(RightMotorDirPin2B, HIGH); analogWrite(speedPinRB, 255); break;
   }
 }
 
-void detenerTodos() {
-  apagarMotor(0); apagarMotor(1); apagarMotor(2); apagarMotor(3);
+void frenarTodos() {
+  apagarMotorActivo(0); apagarMotorActivo(1); apagarMotorActivo(2); apagarMotorActivo(3);
+}
+
+void liberarMotores() {
+  // Elimina la tensión del frenado activo
+  analogWrite(speedPinL, 0); analogWrite(speedPinR, 0);
+  analogWrite(speedPinLB, 0); analogWrite(speedPinRB, 0);
 }
