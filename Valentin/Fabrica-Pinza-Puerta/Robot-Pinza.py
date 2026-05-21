@@ -1,160 +1,119 @@
-#include "WiFiEsp.h"
-#include "WiFiEspUdp.h"
+import pygame
+import socket
+import time
 
-char ssid[] = "ROBOT_COMPETICION"; 
-char pass[] = "12345678"; 
-int status = WL_IDLE_STATUS;
-unsigned int localPort = 8080;
-WiFiEspUDP Udp;
+ROBOT_IP = "192.168.4.1" 
+PORT = 8080
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-// ==========================================
-// CONFIGURACIÓN COMUNICACIÓN CON LA PUERTA (NUEVO)
-// ==========================================
-IPAddress ipBroadcast(192, 168, 4, 255); // Grita a toda la red
-unsigned int puertoPuerta = 8081;        // Puerto donde escucha el SSA
+pygame.init()
+pygame.joystick.init()
 
-// ==========================================
-// PINES MODO TANQUE (Cableado por Lados)
-// ==========================================
-// LADO IZQUIERDO -> Conectados a BK1 y BK2 (Pines D22, D24, PWM D9)
-#define MotorIzq_Dir1 22
-#define MotorIzq_Dir2 24
-#define MotorIzq_PWM  9
+if pygame.joystick.get_count() == 0:
+    print("¡Conecta el mando de PS5 primero!")
+    exit()
 
-// LADO DERECHO -> Conectados a BK3 y BK4 (Pines D26, D28, PWM D10)
-#define MotorDer_Dir1 26
-#define MotorDer_Dir2 28
-#define MotorDer_PWM  10
+mando = pygame.joystick.Joystick(0)
+mando.init()
+print(f"Mando: {mando.get_name()} | Conexión establecida.")
 
-// ==========================================
-// PINES DE LA PINZA -> Conectada a AK1 o AK2
-// (Pines D5, D6, PWM D11)
-// ==========================================
-#define PinzaDir1 5
-#define PinzaDir2 6
-#define PinzaPWM  11
+DEADZONE = 0.2 
 
-#define VELOCIDAD_PINZA 150 // Fuerza de la pinza (0-255)
+# ==========================================
+# LA CAJA DE CAMBIOS
+# ==========================================
+marchas      = [   80,   110,   170,   255  ]
+nombres      = ["LENTA", "BASE", "RÁPIDA", "TURBO"]
+indice_marcha = 1  
 
-// ==========================================
-// VARIABLES DE DATOS
-// ==========================================
-int cur_izq = 0, target_izq = 0;
-int cur_der = 0, target_der = 0;
-int basura1 = 0, basura2 = 0; 
-int target_pinza = 0; 
+print(f"Iniciando en >> MODO {nombres[indice_marcha]} ({marchas[indice_marcha]}/255)")
 
-unsigned long last_millis = 0; 
+# Variables para evitar que el botón haga "spam" por Wi-Fi
+estado_abrir_ant = False
+estado_cerrar_ant = False
 
-void setup() {
-  Serial.begin(115200);   
-  Serial1.begin(115200);  
+try:
+    while True:
+        pygame.event.pump()
+        
+        # --- LECTURA DE LOS JOYSTICKS (INVERTIDOS) ---
+        y = mando.get_axis(1)   
+        r = -mando.get_axis(2)  
 
-  pinMode(MotorIzq_Dir1, OUTPUT); pinMode(MotorIzq_Dir2, OUTPUT); pinMode(MotorIzq_PWM, OUTPUT);
-  pinMode(MotorDer_Dir1, OUTPUT); pinMode(MotorDer_Dir2, OUTPUT); pinMode(MotorDer_PWM, OUTPUT);
-  
-  pinMode(PinzaDir1, OUTPUT); pinMode(PinzaDir2, OUTPUT); pinMode(PinzaPWM, OUTPUT);
+        if abs(y) < DEADZONE: y = 0
+        if abs(r) < DEADZONE: r = 0
 
-  apagar_todo();
+        # --- LECTURA DE CAJA DE CAMBIOS ---
+        try:
+            l2_val = mando.get_axis(4) 
+            r2_val = mando.get_axis(5) 
+            l1_pulsado = mando.get_button(4) or (mando.get_numbuttons() > 9 and mando.get_button(9))
+            r1_pulsado = mando.get_button(5) or (mando.get_numbuttons() > 10 and mando.get_button(10))
+        except:
+            l2_val = -1.0; r2_val = -1.0; l1_pulsado = False; r1_pulsado = False
 
-  WiFi.init(&Serial1);
-  WiFi.beginAP(ssid, 10, pass, ENC_TYPE_WPA2_PSK);
-  Udp.begin(localPort);
-  Serial.println(F("¡Modo Tanque + Pinzas en AK listo!"));
-  Serial.println(F("Esperando órdenes de movimiento y comandos de puerta..."));
-}
+        nuevo_indice = indice_marcha
+        if l1_pulsado: nuevo_indice = 0       
+        elif l2_val > 0.0: nuevo_indice = 1       
+        elif r1_pulsado: nuevo_indice = 2       
+        elif r2_val > 0.0: nuevo_indice = 3       
 
-void loop() {
-  int packetSize = Udp.parsePacket();
-  if (packetSize) {
-    char packetBuffer[64];
-    int len = Udp.read(packetBuffer, 63);
-    if (len > 0) packetBuffer[len] = '\0';
-    
-    // ========================================================
-    // 1. REVISAR SI ES COMANDO DE PUERTA (Mando PS5 - Cruceta)
-    // ========================================================
-    if (strncmp(packetBuffer, "PUERTA_ABRIR", 12) == 0) {
-      Serial.println(F(">>> ORDEN MANDO: ABRIR. Reenviando a la puerta..."));
-      Udp.beginPacket(ipBroadcast, puertoPuerta);
-      Udp.write("ABRIR");
-      Udp.endPacket();
-    } 
-    else if (strncmp(packetBuffer, "PUERTA_CERRAR", 13) == 0) {
-      Serial.println(F(">>> ORDEN MANDO: CERRAR. Reenviando a la puerta..."));
-      Udp.beginPacket(ipBroadcast, puertoPuerta);
-      Udp.write("CERRAR");
-      Udp.endPacket();
-    } 
-    // ========================================================
-    // 2. SI NO ES DE PUERTA, ES TELEMETRÍA NORMAL DE MOTORES
-    // ========================================================
-    else {
-      // Leemos los 5 números: Izquierda, Derecha, 0, 0, Pinza
-      sscanf(packetBuffer, "%d,%d,%d,%d,%d", &target_izq, &target_der, &basura1, &basura2, &target_pinza);
-    }
-  }
+        if nuevo_indice != indice_marcha:
+            indice_marcha = nuevo_indice
+            print(f">> CAMBIO A: MODO {nombres[indice_marcha]} ({marchas[indice_marcha]}/255)")
 
-  // ========================================================
-  // LÓGICA FÍSICA (Motores y Suavizado cada 10ms)
-  // ========================================================
-  if (millis() - last_millis >= 10) { 
-    last_millis = millis();
+        # ==========================================
+        # LÓGICA DE LA PUERTA (CRUCETA) - NUEVO
+        # ==========================================
+        btn_abrir = False
+        btn_cerrar = False
+        try:
+            if mando.get_numhats() > 0:
+                cruceta = mando.get_hat(0)
+                if cruceta[1] == 1: btn_abrir = True    # Flecha Arriba
+                elif cruceta[1] == -1: btn_cerrar = True # Flecha Abajo
+        except:
+            pass
+            
+        if btn_abrir and not estado_abrir_ant:
+            sock.sendto(b"PUERTA_ABRIR\n", (ROBOT_IP, PORT))
+            print("📡 COMANDO ENVIADO: ¡ABRIR barrera!")
+            
+        if btn_cerrar and not estado_cerrar_ant:
+            sock.sendto(b"PUERTA_CERRAR\n", (ROBOT_IP, PORT))
+            print("📡 COMANDO ENVIADO: ¡CERRAR barrera!")
 
-    suavizar_rueda(cur_izq, target_izq);
-    suavizar_rueda(cur_der, target_der);
+        estado_abrir_ant = btn_abrir
+        estado_cerrar_ant = btn_cerrar
 
-    aplicarMotorTanque(1, cur_izq); 
-    aplicarMotorTanque(2, cur_der); 
-    
-    aplicarPinza(target_pinza);
-  }
-}
+        # --- LÓGICA DE LAS PINZAS ---
+        try:
+            btn_x = mando.get_button(0)       
+            btn_circulo = mando.get_button(1) 
+        except:
+            btn_x = False; btn_circulo = False
 
-// =========================================================
-void aplicarPinza(int estado) {
-  if (estado == 1) { // Cerrar
-    digitalWrite(PinzaDir1, HIGH); digitalWrite(PinzaDir2, LOW); analogWrite(PinzaPWM, VELOCIDAD_PINZA);
-  } else if (estado == -1) { // Abrir
-    digitalWrite(PinzaDir1, LOW); digitalWrite(PinzaDir2, HIGH); analogWrite(PinzaPWM, VELOCIDAD_PINZA);
-  } else { // Quieto
-    digitalWrite(PinzaDir1, LOW); digitalWrite(PinzaDir2, LOW); analogWrite(PinzaPWM, 0);
-  }
-}
+        estado_pinza = 0 
+        if btn_x and not btn_circulo: estado_pinza = 1  
+        elif btn_circulo and not btn_x: estado_pinza = -1 
 
-// =========================================================
-void suavizar_rueda(int &current, int target) {
-  if (target == 0 || (current > 0 && target < 0) || (current < 0 && target > 0)) {
-    current = target; return;
-  }
-  if (abs(target) < abs(current)) { current = target; return; }
-  
-  if (current < target) {
-    current += 8; if (current > target) current = target;
-  } else if (current > target) {
-    current -= 8; if (current < target) current = target;
-  }
-}
+        # --- MATEMÁTICAS MODO TANQUE ---
+        velocidad_actual = marchas[indice_marcha]
 
-// =========================================================
-void aplicarMotorTanque(int lado, int velocidad) {
-  bool hacia_adelante = (velocidad >= 0);
-  int pwm = abs(velocidad);
-  if (pwm > 255) pwm = 255;
+        val_izq = y + r  
+        val_der = y - r  
 
-  if (lado == 1) { // LADO IZQUIERDO
-    digitalWrite(MotorIzq_Dir1, hacia_adelante ? LOW : HIGH);
-    digitalWrite(MotorIzq_Dir2, hacia_adelante ? HIGH : LOW);
-    analogWrite(MotorIzq_PWM, pwm);
-  } else { // LADO DERECHO
-    digitalWrite(MotorDer_Dir1, hacia_adelante ? LOW : HIGH);
-    digitalWrite(MotorDer_Dir2, hacia_adelante ? HIGH : LOW);
-    analogWrite(MotorDer_PWM, pwm);
-  }
-}
+        max_val = max(abs(val_izq), abs(val_der), 1.0)
+        
+        motor_izq = int((val_izq / max_val) * velocidad_actual)
+        motor_der = int((val_der / max_val) * velocidad_actual)
 
-void apagar_todo() {
-  target_izq = 0; target_der = 0;
-  aplicarMotorTanque(1, 0); aplicarMotorTanque(2, 0);
-  aplicarPinza(0);
-}
+        # Enviamos: Izquierda, Derecha, 0, 0, Pinza
+        paquete = f"{motor_izq},{motor_der},0,0,{estado_pinza}\n".encode()
+        sock.sendto(paquete, (ROBOT_IP, PORT))
+        
+        time.sleep(0.02) 
+
+except KeyboardInterrupt:
+    print("\nConexión finalizada.")
+    pygame.quit()
