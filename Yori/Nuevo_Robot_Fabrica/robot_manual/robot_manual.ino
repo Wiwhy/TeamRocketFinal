@@ -4,14 +4,11 @@
 char ssid[] = "ROBOT_COMPETICION"; 
 char pass[] = "12345678"; 
 int status = WL_IDLE_STATUS;
-unsigned int localPort = 8080; // Puerto donde escucha al PC
+unsigned int localPort = 8080;
 WiFiEspUDP Udp;
 
-// CONFIGURACIÓN COMUNICACIÓN PUERTA
-IPAddress ipBroadcast(192, 168, 4, 255);
 unsigned int puertoPuerta = 8081;
 
-// Pines de las 4 ruedas (Mecanum Modo Tanque)
 #define speedPinR 9
 #define RightMotorDirPin1  22
 #define RightMotorDirPin2  24
@@ -25,7 +22,6 @@ unsigned int puertoPuerta = 8081;
 #define LeftMotorDirPin2B 8
 #define speedPinLB 12
 
-// Pines de la pinza
 #define PinzaDir1 30
 #define PinzaDir2 32
 #define PinzaPWM 4
@@ -36,11 +32,11 @@ int cur_fr = 0, target_fr = 0;
 int cur_bl = 0, target_bl = 0;
 int cur_br = 0, target_br = 0;
 int target_pinza = 0;
-unsigned long last_millis = 0; 
+unsigned long last_millis = 0;
 
 void setup() {
   Serial.begin(115200);   
-  Serial1.begin(9600);
+  Serial1.begin(115200); 
 
   pinMode(RightMotorDirPin1, OUTPUT); pinMode(RightMotorDirPin2, OUTPUT); pinMode(speedPinR, OUTPUT);
   pinMode(LeftMotorDirPin1, OUTPUT);  pinMode(LeftMotorDirPin2, OUTPUT);  pinMode(speedPinL, OUTPUT);
@@ -53,28 +49,24 @@ void setup() {
   WiFi.init(&Serial1);
   WiFi.beginAP(ssid, 10, pass, ENC_TYPE_WPA2_PSK);
   Udp.begin(localPort);
-  Serial.println("¡Mecanum 4x4 + Enrutador de Puerta listo!");
+  Serial.println(F("¡Mecanum 4x4 + Enrutador Abanico de Puerta listo!"));
 }
 
 void loop() {
   int packetSize = Udp.parsePacket();
-  
   if (packetSize) {
     char packetBuffer[64];
     int len = Udp.read(packetBuffer, 63);
     if (len > 0) packetBuffer[len] = '\0';
     
-   if (strncmp(packetBuffer, "PUERTA_ABRIR", 12) == 0) {
-      Serial.println(">>> Enviando orden de apertura (Broadcast)...");
-      Udp.beginPacket(ipBroadcast, puertoPuerta);
-      Udp.write("ABRIR");
-      Udp.endPacket();
+    // FILTRO DE ENRUTAMIENTO DE LA PUERTA
+    if (strncmp(packetBuffer, "PUERTA_ABRIR", 12) == 0) {
+      Serial.println(F(">>> Orden ABRIR recibida del PC. Disparando..."));
+      disparoAbanico("ABRIR");
     } 
     else if (strncmp(packetBuffer, "PUERTA_CERRAR", 13) == 0) {
-      Serial.println(">>> Enviando orden de cierre (Broadcast)...");
-      Udp.beginPacket(ipBroadcast, puertoPuerta);
-      Udp.write("CERRAR");
-      Udp.endPacket();
+      Serial.println(F(">>> Orden CERRAR recibida del PC. Disparando..."));
+      disparoAbanico("CERRAR");
     }
     else {
       sscanf(packetBuffer, "%d,%d,%d,%d,%d", &target_fl, &target_fr, &target_bl, &target_br, &target_pinza);
@@ -83,8 +75,10 @@ void loop() {
 
   if (millis() - last_millis >= 10) { 
     last_millis = millis();
-    suavizar_rueda(cur_fl, target_fl); suavizar_rueda(cur_fr, target_fr);
-    suavizar_rueda(cur_bl, target_bl); suavizar_rueda(cur_br, target_br);
+    suavizar_rueda(cur_fl, target_fl);
+    suavizar_rueda(cur_fr, target_fr);
+    suavizar_rueda(cur_bl, target_bl); 
+    suavizar_rueda(cur_br, target_br);
 
     aplicarMotor(1, cur_fl); aplicarMotor(2, cur_fr);
     aplicarMotor(3, cur_bl); aplicarMotor(4, cur_br);
@@ -92,6 +86,20 @@ void loop() {
   }
 }
 
+// =========================================================
+// RUTINA DE COMUNICACIÓN INFALIBLE (Bypass del Broadcast)
+// =========================================================
+void disparoAbanico(const char* mensaje) {
+  for (byte i = 2; i <= 5; i++) {
+    IPAddress ipDestino(192, 168, 4, i);
+    Udp.beginPacket(ipDestino, puertoPuerta);
+    Udp.write(mensaje);
+    Udp.endPacket();
+    delay(20); // MAGIA: Esta pausa de 20ms evita que la antena se sature y tire los paquetes
+  }
+}
+
+// =========================================================
 void aplicarPinza(int estado) {
   if (estado == 1) { digitalWrite(PinzaDir1, HIGH); digitalWrite(PinzaDir2, LOW); analogWrite(PinzaPWM, VELOCIDAD_PINZA); } 
   else if (estado == -1) { digitalWrite(PinzaDir1, LOW); digitalWrite(PinzaDir2, HIGH); analogWrite(PinzaPWM, VELOCIDAD_PINZA); } 

@@ -31,10 +31,10 @@ try:
     while True:
         pygame.event.pump()
         
-        # --- 1. LECTURA DE EJES (CORREGIDO) ---
-        x = mando.get_axis(0)    # Joystick Izquierdo (Izquierda/Derecha) -> Strafe Lateral
-        y = -mando.get_axis(1)   # Joystick Izquierdo (Arriba/Abajo) -> El MENOS corrige la marcha atrás
-        r = mando.get_axis(2)    # Joystick Derecho -> Rotación sobre el propio eje
+        # --- 1. LECTURA DE EJES ---
+        x = mando.get_axis(0)    
+        y = -mando.get_axis(1)   
+        r = mando.get_axis(2)    
         
         if abs(x) < DEADZONE: x = 0
         if abs(y) < DEADZONE: y = 0
@@ -59,22 +59,41 @@ try:
             indice_marcha = nuevo_indice
             print(f">> CAMBIO A: MODO {nombres[indice_marcha]}")
 
-        # --- LÓGICA DE LA PUERTA (CRUCETAS) ---
+        # --- LÓGICA DE LA PUERTA (BLINDADA CONTRA ATASCOS) ---
         btn_abrir = False; btn_cerrar = False
+        teclas = pygame.key.get_pressed()
+        
+        # Respaldo 100% fiable: Flechas del Teclado de tu PC
+        if teclas[pygame.K_UP]: btn_abrir = True
+        if teclas[pygame.K_DOWN]: btn_cerrar = True
+        
         try:
+            # Cruceta PS5 clásica
             if mando.get_numhats() > 0:
                 cruceta = mando.get_hat(0)
                 if cruceta[1] == 1: btn_abrir = True    
                 elif cruceta[1] == -1: btn_cerrar = True 
+                
+            # Cruceta PS5 Mapeada como botones (11 y 12 suelen ser Arriba/Abajo)
+            if mando.get_numbuttons() > 12:
+                if mando.get_button(11): btn_abrir = True
+                if mando.get_button(12): btn_cerrar = True
         except:
             pass
             
         if btn_abrir and not estado_abrir_ant:
             sock.sendto(b"PUERTA_ABRIR\n", (ROBOT_IP, PORT))
             print("📡 COMANDO ENVIADO: ¡ABRIR barrera!")
+            estado_abrir_ant = True
+            time.sleep(0.1) # MAGIA: Pausamos Python 0.1s para que el paquete viaje limpio
+            continue # Saltamos la telemetría para que no lo atropelle
+            
         if btn_cerrar and not estado_cerrar_ant:
             sock.sendto(b"PUERTA_CERRAR\n", (ROBOT_IP, PORT))
             print("📡 COMANDO ENVIADO: ¡CERRAR barrera!")
+            estado_cerrar_ant = True
+            time.sleep(0.1) 
+            continue 
 
         estado_abrir_ant = btn_abrir
         estado_cerrar_ant = btn_cerrar
@@ -90,16 +109,14 @@ try:
         if btn_x and not btn_circulo: estado_pinza = 1  
         elif btn_circulo and not btn_x: estado_pinza = -1 
 
-        # --- 2. CINEMÁTICA MECANUM PURA (4 MOTORES INDEPENDIENTES) ---
+        # --- 2. CINEMÁTICA MECANUM ---
         velocidad_actual = marchas[indice_marcha]
         
-        # Fórmulas geométricas para ruedas Mecanum
         fl = y + x + r
         fr = y - x - r
         bl = y - x + r
         br = y + x - r
         
-        # Evitar que las sumas superen la velocidad máxima
         max_val = max(abs(fl), abs(fr), abs(bl), abs(br), 1.0)
         
         motor_fl = int((fl / max_val) * velocidad_actual)
@@ -107,7 +124,6 @@ try:
         motor_bl = int((bl / max_val) * velocidad_actual)
         motor_br = int((br / max_val) * velocidad_actual)
 
-        # 3. ENVIAR PAQUETE COMPLETO (4 Ruedas + Pinza)
         paquete = f"{motor_fl},{motor_fr},{motor_bl},{motor_br},{estado_pinza}\n".encode()
         sock.sendto(paquete, (ROBOT_IP, PORT))
         time.sleep(0.02) 
