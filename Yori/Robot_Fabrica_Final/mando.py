@@ -1,0 +1,132 @@
+import pygame
+import socket
+import time
+
+ROBOT_IP = "192.168.4.1" 
+PORT = 8080
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+pygame.init()
+pygame.joystick.init()
+
+if pygame.joystick.get_count() == 0:
+    print("¡Conecta el mando de PS5 primero!")
+    exit()
+
+mando = pygame.joystick.Joystick(0)
+mando.init()
+print(f"Mando: {mando.get_name()} | Conexión establecida.")
+
+DEADZONE = 0.2 
+marchas       = [   80,   130,   200,   255  ]
+nombres       = ["LENTA", "BASE", "RÁPIDA", "TURBO"]
+indice_marcha = 1  
+
+print(f"Iniciando en >> MODO {nombres[indice_marcha]} ({marchas[indice_marcha]}/255)")
+
+estado_abrir_ant = False
+estado_cerrar_ant = False
+
+try:
+    while True:
+        pygame.event.pump()
+        
+        # =======================================================
+        # 1. LECTURA DE EJES (MODO CONDUCCIÓN ARCADE SEPARADA)
+        # =======================================================
+        
+        # JOYSTICK IZQUIERDO: Adelante y Atrás
+        y = -mando.get_axis(1)   
+        
+        # JOYSTICK DERECHO: Rotar (INVERTIDO CON EL SIGNO MENOS)
+        r = -mando.get_axis(2)    
+        
+        if abs(y) < DEADZONE: y = 0
+        if abs(r) < DEADZONE: r = 0
+
+        # --- CAJA DE CAMBIOS ---
+        try:
+            l2_val = mando.get_axis(4) 
+            r2_val = mando.get_axis(5) 
+            l1_pulsado = mando.get_button(4) or (mando.get_numbuttons() > 9 and mando.get_button(9))
+            r1_pulsado = mando.get_button(5) or (mando.get_numbuttons() > 10 and mando.get_button(10))
+        except:
+            l2_val = -1.0; r2_val = -1.0; l1_pulsado = False; r1_pulsado = False
+
+        nuevo_indice = indice_marcha
+        if l1_pulsado: nuevo_indice = 0       
+        elif l2_val > 0.0: nuevo_indice = 1       
+        elif r1_pulsado: nuevo_indice = 2       
+        elif r2_val > 0.0: nuevo_indice = 3       
+
+        if nuevo_indice != indice_marcha:
+            indice_marcha = nuevo_indice
+            print(f">> CAMBIO A: MODO {nombres[indice_marcha]}")
+
+        # --- LÓGICA DE LA PUERTA ---
+        btn_abrir = False; btn_cerrar = False
+        teclas = pygame.key.get_pressed()
+        
+        if teclas[pygame.K_UP]: btn_abrir = True
+        if teclas[pygame.K_DOWN]: btn_cerrar = True
+        
+        try:
+            if mando.get_numhats() > 0:
+                cruceta = mando.get_hat(0)
+                if cruceta[1] == 1: btn_abrir = True    
+                elif cruceta[1] == -1: btn_cerrar = True 
+                
+            if mando.get_numbuttons() > 12:
+                if mando.get_button(11): btn_abrir = True
+                if mando.get_button(12): btn_cerrar = True
+        except:
+            pass
+            
+        if btn_abrir and not estado_abrir_ant:
+            sock.sendto(b"PUERTA_ABRIR\n", (ROBOT_IP, PORT))
+            print("📡 COMANDO ENVIADO: ¡ABRIR barrera!")
+            estado_abrir_ant = True
+            time.sleep(0.1) 
+            continue 
+            
+        if btn_cerrar and not estado_cerrar_ant:
+            sock.sendto(b"PUERTA_CERRAR\n", (ROBOT_IP, PORT))
+            print("📡 COMANDO ENVIADO: ¡CERRAR barrera!")
+            estado_cerrar_ant = True
+            time.sleep(0.1) 
+            continue 
+
+        estado_abrir_ant = btn_abrir
+        estado_cerrar_ant = btn_cerrar
+
+        # --- LÓGICA DE PINZA ---
+        try:
+            btn_x = mando.get_button(0)       
+            btn_circulo = mando.get_button(1) 
+        except:
+            btn_x = False; btn_circulo = False
+
+        estado_pinza = 0 
+        if btn_x and not btn_circulo: estado_pinza = 1  
+        elif btn_circulo and not btn_x: estado_pinza = -1 
+
+        # =======================================================
+        # 2. CINEMÁTICA MATEMÁTICA
+        # =======================================================
+        velocidad_actual = marchas[indice_marcha]
+        
+        val_izq = y + r
+        val_der = y - r
+        max_val = max(abs(val_izq), abs(val_der), 1.0)
+        
+        motor_izq = int((val_izq / max_val) * velocidad_actual)
+        motor_der = int((val_der / max_val) * velocidad_actual)
+
+        # Enviar paquete (Izquierda, Derecha, Cero, Cero, Pinza)
+        paquete = f"{motor_izq},{motor_der},0,0,{estado_pinza}\n".encode()
+        sock.sendto(paquete, (ROBOT_IP, PORT))
+        time.sleep(0.02) 
+
+except KeyboardInterrupt:
+    print("\nConexión finalizada.")
+    pygame.quit()

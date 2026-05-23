@@ -8,8 +8,10 @@ unsigned int localPort = 8081;
 WiFiEspUDP Udp;
 
 void setup() {
-  Serial.begin(115200);   
-  Serial1.begin(115200);  
+  Serial.begin(115200);   // Esto es para que TÚ lo leas bien en el ordenador
+  Serial1.begin(9600);    // 🚨 CAMBIO AQUÍ: Probamos a hablarle más lento al chip Wi-Fi
+
+  WiFi.init(&Serial1);
 
   Serial.println(F("\n--- MEGA EXTERNA (PUERTA) INICIADA ---"));
   Serial.print(F("Conectando a la red del robot..."));
