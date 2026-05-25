@@ -1,4 +1,4 @@
-
+  
 // Version 3.8.2 (Dual Mode + Freno Activo - Panel de Control Unificado)
 // ============================================================
 //  TIRABOLOS / SUMO - Robot Multi-Pista
