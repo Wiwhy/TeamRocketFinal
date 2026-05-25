@@ -31,7 +31,7 @@ const int DELAY_POST_RETRO           = 200;
   bool INICIO_RETROCESO     = true; 
   int  DIST_DETECCION       = 100;
   int  TIEMPO_INICIO_AVANCE = 800;
-  int  TIEMPO_RETROCESO     = 720;
+  int  TIEMPO_RETROCESO     = 730;
   int  VEL_BUSQUEDA         = 180; 
   int  TIEMPO_GIRO          = 20;  
   int  PAUSA_PRE_MEDIR      = 15;  
@@ -41,7 +41,7 @@ const int DELAY_POST_RETRO           = 200;
   bool INICIO_RETROCESO     = false; 
   int  DIST_DETECCION       = 200;
   int  TIEMPO_INICIO_AVANCE = 1600;
-  int  TIEMPO_RETROCESO     = 1600;
+  int  TIEMPO_RETROCESO     = 1460;
   int  VEL_BUSQUEDA         = 120; 
   int  TIEMPO_GIRO          = 40;  
   int  PAUSA_PRE_MEDIR      = 30;  
@@ -146,18 +146,21 @@ void maniobraInicio() {
   velocidad(VEL_INICIO_RETRO);
   while (!hayLineaTrasera()) { delay(5); }
 
+  // Freno al tocar la línea trasera
   avanzar();
   velocidad(255);
-  delay(15);         
+  delay(TIEMPO_CONTRAMARCHA_RECTO); // <-- CORREGIDO: Ahora usa los 70ms
   frenoMagnetico();
-  delay(15);         
+  delay(50);         
   parar();
   delay(PAUSA_ESTABILIZACION);
 
+  // Empujón al centro
   avanzar();
   velocidad(VEL_INICIO_AVANCE);
   delay(TIEMPO_INICIO_AVANCE); 
 
+  // Freno al llegar al centro
   retroceder();
   velocidad(255);
   delay(TIEMPO_CONTRAMARCHA_RECTO);
