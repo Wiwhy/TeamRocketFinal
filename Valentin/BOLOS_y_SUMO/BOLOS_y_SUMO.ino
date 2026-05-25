@@ -1,42 +1,55 @@
-// Version 3.8 (Dual Mode + Freno Activo por Contramarcha AUMENTADO)
+// Version 3.8.9 (Dual Mode + Freno Activo + Ultrasonido Trasero + Contragiro Solo Atrás)
 // ============================================================
 //  TIRABOLOS / SUMO - Robot Multi-Pista
-//  BUSCAR -> ATACAR -> RETROCEDER (loop infinito)
+//  Ataque Bidireccional (Frente y Espalda)
 // ============================================================
 
 // ************************************************************
-//  SECCION 1: MODO DE COMPETICION Y CONFIGURACION
+//  SECCION 1: PANEL DE CONTROL
 // ************************************************************
 
-// Cambia esta variable a true o false según lo que vayas a jugar:
-bool MODO_SUMO = true; 
+// 1. ELIGE EL MODO DE JUEGO (true = SUMO, false = TIRABOLOS)
+#define MODO_SUMO true 
 
-// 🚨 CALIBRACIÓN DEL FRENO POR CONTRAMARCHA (TIEMPOS AUMENTADOS) 🚨
-const int TIEMPO_CONTRAMARCHA_RECTO = 70; // Subido a 70ms (Frena la masa a máxima velocidad)
-const int TIEMPO_CONTRAMARCHA_GIRO  = 50; // Subido a 50ms (Clava el robot al girar)
+// 2. CALIBRACIÓN DE FRENOS Y PAUSAS
+const int TIEMPO_CONTRAMARCHA_RECTO = 70;  // Freno lineal para frente y maniobra de inicio
+const int TIEMPO_CONTRAMARCHA_GIRO  = 20; // Latigazo lateral SOLO para el sensor trasero
+const int PAUSA_ESTABILIZACION      = 0; 
 
-// --- Variables dependientes del modo ---
-bool INICIO_RETROCESO;
-int  DIST_DETECCION;
-int  TIEMPO_INICIO_AVANCE;
-int  TIEMPO_RETROCESO;
-int  VEL_BUSQUEDA;
-int  TIEMPO_GIRO;
-int  PAUSA_PRE_MEDIR;
-unsigned long US_TIMEOUT;
-
-// --- Configuraciones Generales Compartidas ---
-const int VEL_INICIO_RETRO     = 150;  
+// 3. CONFIGURACIONES COMPARTIDAS
+const int VEL_INICIO_RETRO     = 200;  
 const int VEL_INICIO_AVANCE    = 200; 
 const int VEL_ATAQUE           = 200; 
-const int VEL_RETROCESO        = 190; 
-
-const unsigned long TIMEOUT_BUSQUEDA = 3500UL; 
-const int DELAY_PRE_ATAQUE           = 0;      
+const int VEL_RETROCESO        = 200; 
+const unsigned long TIMEOUT_BUSQUEDA = 5000UL; 
+const int DELAY_PRE_ATAQUE           = 10;      
 const int DELAY_POST_RETRO           = 200;    
 
+// 4. CONFIGURACIONES ESPECÍFICAS
+#if MODO_SUMO == true
+  // --- Perfil SUMO ---
+  bool INICIO_RETROCESO     = true; 
+  int  DIST_DETECCION       = 100;
+  int  TIEMPO_INICIO_AVANCE = 800;
+  int  TIEMPO_RETROCESO     = 720;
+  int  VEL_BUSQUEDA         = 180; 
+  int  TIEMPO_GIRO          = 20;  
+  int  PAUSA_PRE_MEDIR      = 15;  
+  unsigned long US_TIMEOUT  = 6000UL; 
+#else
+  // --- Perfil TIRABOLOS ---
+  bool INICIO_RETROCESO     = false; 
+  int  DIST_DETECCION       = 200;
+  int  TIEMPO_INICIO_AVANCE = 1600;
+  int  TIEMPO_RETROCESO     = 1600;
+  int  VEL_BUSQUEDA         = 120; 
+  int  TIEMPO_GIRO          = 40;  
+  int  PAUSA_PRE_MEDIR      = 30;  
+  unsigned long US_TIMEOUT  = 15000UL; 
+#endif
+
 // ************************************************************
-//  SECCION 2: PINES
+//  SECCION 2: PINES 
 // ************************************************************
 
 #define speedPinR          9
@@ -53,8 +66,13 @@ const int DELAY_POST_RETRO           = 200;
 #define LeftMotorDirPin2B   8
 #define speedPinLB         12
 
+// Sensor Frontal
 #define TRIG  30
 #define ECHO  31
+
+// Sensor Trasero
+#define ECHO_T 42
+#define TRIG_T 43
 
 #define S1  A4
 #define S2  A3
@@ -72,7 +90,7 @@ const int DELAY_POST_RETRO           = 200;
 //  SECCION 3: ESTADOS Y VARIABLES GLOBALES
 // ************************************************************
 
-enum Estado { BUSCAR, ATACAR, RETROCEDER };
+enum Estado { BUSCAR, ATACAR_FRONTAL, ATACAR_TRASERO, ESCAPAR_ATRAS, ESCAPAR_ADELANTE };
 Estado        estado      = BUSCAR;
 unsigned long tRetroIni   = 0;       
 unsigned long tBuscarIni  = 0;       
@@ -84,25 +102,11 @@ unsigned long tBuscarIni  = 0;
 void setup() {
   Serial.begin(9600);
 
-  if (MODO_SUMO == true) {
-    INICIO_RETROCESO     = true; 
-    DIST_DETECCION       = 100;
-    TIEMPO_INICIO_AVANCE = 700;
-    TIEMPO_RETROCESO     = 700;
-    VEL_BUSQUEDA         = 180; 
-    TIEMPO_GIRO          = 20;  
-    PAUSA_PRE_MEDIR      = 15;  
-    US_TIMEOUT           = 6000UL; 
-  } else {
-    INICIO_RETROCESO     = false; 
-    DIST_DETECCION       = 200;
-    TIEMPO_INICIO_AVANCE = 1400;
-    TIEMPO_RETROCESO     = 1400;
-    VEL_BUSQUEDA         = 140; 
-    TIEMPO_GIRO          = 45;  
-    PAUSA_PRE_MEDIR      = 30;  
-    US_TIMEOUT           = 15000UL; 
-  }
+  #if MODO_SUMO == true
+    Serial.println(F("=== MODO: SUMO ==="));
+  #else
+    Serial.println(F("=== MODO: TIRABOLOS ==="));
+  #endif
 
   pinMode(RightMotorDirPin1,  OUTPUT); pinMode(RightMotorDirPin2,  OUTPUT);
   pinMode(LeftMotorDirPin1,   OUTPUT); pinMode(LeftMotorDirPin2,   OUTPUT);
@@ -114,6 +118,10 @@ void setup() {
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
   digitalWrite(TRIG, LOW);
+
+  pinMode(TRIG_T, OUTPUT);
+  pinMode(ECHO_T, INPUT);
+  digitalWrite(TRIG_T, LOW);
 
   pinMode(S1, INPUT); pinMode(S2, INPUT); pinMode(S3, INPUT);
   pinMode(S4, INPUT); pinMode(S5, INPUT);
@@ -134,29 +142,29 @@ void setup() {
 // ************************************************************
 
 void maniobraInicio() {
+  retroceder(); 
   velocidad(VEL_INICIO_RETRO);
-  retroceder();
-while (!hayLineaTrasera()) { delay(5); } // <-- El robot retrocede hasta que toca la línea trasera
+  while (!hayLineaTrasera()) { delay(5); }
 
-  velocidad(255);
   avanzar();
-  delay(15);         // 1. Minipausa fija (30ms) para frenar con contramarcha
+  velocidad(255);
+  delay(15);         
   frenoMagnetico();
-  delay(15);         // 2. Minipausa fija (50ms) mientras aplica el freno magnético
+  delay(15);         
   parar();
-       // 3. PAUSA FIJA DE ESPERA (100ms) con motores apagados antes de salir
+  delay(PAUSA_ESTABILIZACION);
 
-  velocidad(VEL_INICIO_AVANCE);
   avanzar();
-  delay(TIEMPO_INICIO_AVANCE); // 4. VARIABLE que dicta cuánto tiempo avanza hacia adelante
+  velocidad(VEL_INICIO_AVANCE);
+  delay(TIEMPO_INICIO_AVANCE); 
 
-  velocidad(255);
   retroceder();
+  velocidad(255);
   delay(TIEMPO_CONTRAMARCHA_RECTO);
   frenoMagnetico();
   delay(50);
   parar();
-  delay(200);  
+  delay(PAUSA_ESTABILIZACION);  
 }
 
 // ************************************************************
@@ -164,7 +172,8 @@ while (!hayLineaTrasera()) { delay(5); } // <-- El robot retrocede hasta que toc
 // ************************************************************
 
 void loop() {
-  bool linea = hayLinea();
+  bool lineaFrente = hayLinea();
+  bool lineaAtras  = hayLineaTrasera();
 
   switch (estado) {
 
@@ -172,81 +181,154 @@ void loop() {
     //  ESTADO: BUSCAR
     // --------------------------------------------------------
     case BUSCAR:
-      if (linea) {
+      if (lineaFrente) {
+        retroceder(); // Contramarcha recta (sin giro)
         velocidad(255);
-        girarInverso(); 
+        delay(TIEMPO_CONTRAMARCHA_RECTO); 
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION);
+        
+        estado    = ESCAPAR_ATRAS;
+        tRetroIni = millis();
+        break;
+      }
+      
+      if (lineaAtras) {
+        girar(); // Contragiro derecha (SOLO ATRÁS)
+        velocidad(255);
         delay(TIEMPO_CONTRAMARCHA_GIRO); 
         frenoMagnetico();
         delay(50);
         parar();
+        delay(PAUSA_ESTABILIZACION);
         
-        estado    = RETROCEDER;
+        estado    = ESCAPAR_ADELANTE;
         tRetroIni = millis();
         break;
       }
 
       if (millis() - tBuscarIni >= TIMEOUT_BUSQUEDA) {
-        estado = ATACAR;
+        estado = ATACAR_FRONTAL;
         break;
       }
 
-      velocidad(VEL_BUSQUEDA);
       girar();
+      velocidad(VEL_BUSQUEDA);
       delay(TIEMPO_GIRO);
 
       {
         frenoMagnetico(); 
         delay(15);
         parar();
-        
         delay(PAUSA_PRE_MEDIR);
-        int d = medirMediana();
-
-        if (d > 0 && d <= DIST_DETECCION) {
+        
+        // 1. Medir Frente
+        int dFrente = medirMediana(TRIG, ECHO);
+        if (dFrente > 0 && dFrente <= DIST_DETECCION) {
           delay(DELAY_PRE_ATAQUE);
-          estado = ATACAR;
+          estado = ATACAR_FRONTAL;
+          break; 
+        }
+
+        // 2. Medir Atrás
+        int dAtras = medirMediana(TRIG_T, ECHO_T);
+        if (dAtras > 0 && dAtras <= DIST_DETECCION) {
+          delay(DELAY_PRE_ATAQUE);
+          estado = ATACAR_TRASERO;
         }
       }
       break;
 
     // --------------------------------------------------------
-    //  ESTADO: ATACAR
+    //  ESTADO: ATACAR FRONTAL
     // --------------------------------------------------------
-    case ATACAR:
-      if (linea) {
+    case ATACAR_FRONTAL:
+      if (lineaFrente) {
+        retroceder(); // Contramarcha recta (sin giro)
         velocidad(255);
-        retroceder();
         delay(TIEMPO_CONTRAMARCHA_RECTO); 
         frenoMagnetico();
         delay(50);
         parar();
+        delay(PAUSA_ESTABILIZACION);
         
-        estado    = RETROCEDER;
+        estado    = ESCAPAR_ATRAS;
         tRetroIni = millis();
         break;
       }
 
-      velocidad(VEL_ATAQUE);
       avanzar();
+      velocidad(VEL_ATAQUE);
       break;
 
     // --------------------------------------------------------
-    //  ESTADO: RETROCEDER
+    //  ESTADO: ATACAR TRASERO
     // --------------------------------------------------------
-    case RETROCEDER:
-      if (millis() - tRetroIni < (unsigned long)TIEMPO_RETROCESO) {
-        velocidad(VEL_RETROCESO);
-        retroceder();
-      } else {
+    case ATACAR_TRASERO:
+      if (lineaAtras) {
+        girar(); // Contragiro derecha (SOLO ATRÁS)
         velocidad(255);
+        delay(TIEMPO_CONTRAMARCHA_GIRO); 
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION);
+        
+        estado    = ESCAPAR_ADELANTE;
+        tRetroIni = millis();
+        break;
+      }
+
+      retroceder();
+      velocidad(VEL_ATAQUE);
+      break;
+
+    // --------------------------------------------------------
+    //  ESTADO: ESCAPAR_ATRAS (Tocó línea frontal)
+    // --------------------------------------------------------
+    case ESCAPAR_ATRAS:
+      if (millis() - tRetroIni < (unsigned long)TIEMPO_RETROCESO) {
+        retroceder();
+        velocidad(VEL_RETROCESO);
+      } else {
         avanzar();
+        velocidad(255);
         delay(30);
         frenoMagnetico();
         delay(50);
         parar();
-        
+        delay(PAUSA_ESTABILIZACION); 
         delay(DELAY_POST_RETRO); 
-        medirMediana(); 
+        
+        medirMediana(TRIG, ECHO);     
+        medirMediana(TRIG_T, ECHO_T); 
+
+        estado = BUSCAR;
+        tBuscarIni = millis();  
+      }
+      break;
+
+    // --------------------------------------------------------
+    //  ESTADO: ESCAPAR_ADELANTE (Tocó línea trasera)
+    // --------------------------------------------------------
+    case ESCAPAR_ADELANTE:
+      if (millis() - tRetroIni < (unsigned long)TIEMPO_RETROCESO) {
+        avanzar();
+        velocidad(VEL_RETROCESO);
+      } else {
+        retroceder();
+        velocidad(255);
+        delay(30);
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION); 
+        delay(DELAY_POST_RETRO); 
+        
+        medirMediana(TRIG, ECHO);     
+        medirMediana(TRIG_T, ECHO_T); 
 
         estado = BUSCAR;
         tBuscarIni = millis();  
@@ -259,14 +341,14 @@ void loop() {
 //  SECCION 7: ULTRASONIDO
 // ************************************************************
 
-int medir() {
-  digitalWrite(TRIG, LOW);
+int medir(int pinTrig, int pinEcho) {
+  digitalWrite(pinTrig, LOW);
   delayMicroseconds(4);
-  digitalWrite(TRIG, HIGH);
+  digitalWrite(pinTrig, HIGH);
   delayMicroseconds(10);
-  digitalWrite(TRIG, LOW);
+  digitalWrite(pinTrig, LOW);
   
-  long us = pulseIn(ECHO, HIGH, US_TIMEOUT); 
+  long us = pulseIn(pinEcho, HIGH, US_TIMEOUT); 
   
   if (us == 0) return 999;        
   int cm = (int)(us / 58);
@@ -274,10 +356,10 @@ int medir() {
   return cm;
 }
 
-int medirMediana() {
-  int a = medir(); delayMicroseconds(500);
-  int b = medir(); delayMicroseconds(500);
-  int c = medir();
+int medirMediana(int pinTrig, int pinEcho) {
+  int a = medir(pinTrig, pinEcho); delayMicroseconds(500);
+  int b = medir(pinTrig, pinEcho); delayMicroseconds(500);
+  int c = medir(pinTrig, pinEcho);
   
   if (a > b) { int t = a; a = b; b = t; }
   if (b > c) { int t = b; b = c; c = t; }
