@@ -1,4 +1,4 @@
-// Version 3.8.10 (Dual Mode + Freno Activo + Ultrasonido Trasero + Arranque por Mando)
+// Version 3.8.10 (Dual Mode + Freno Activo + Ultrasonido Trasero + Arranque por Mando Serial)
 // ============================================================
 //  TIRABOLOS / SUMO - Robot Multi-Pista
 //  Ataque Bidireccional (Frente y Espalda)
@@ -12,8 +12,8 @@
 #define MODO_SUMO true 
 
 // 2. CALIBRACIÓN DE FRENOS Y PAUSAS
-const int TIEMPO_CONTRAMARCHA_RECTO = 70;  // Freno lineal para frente y maniobra de inicio
-const int TIEMPO_CONTRAMARCHA_GIRO  = 20; // Latigazo lateral SOLO para el sensor trasero
+const int TIEMPO_CONTRAMARCHA_RECTO = 70;  
+const int TIEMPO_CONTRAMARCHA_GIRO  = 20; 
 const int PAUSA_ESTABILIZACION      = 0; 
 
 // 3. CONFIGURACIONES COMPARTIDAS
@@ -105,4 +105,314 @@ void setup() {
   #if MODO_SUMO == true
     Serial.println(F("=== MODO: SUMO ==="));
   #else
-    Serial.println(F("===
+    Serial.println(F("=== MODO: TIRABOLOS ==="));
+  #endif
+
+  pinMode(RightMotorDirPin1,  OUTPUT); pinMode(RightMotorDirPin2,  OUTPUT);
+  pinMode(LeftMotorDirPin1,   OUTPUT); pinMode(LeftMotorDirPin2,   OUTPUT);
+  pinMode(speedPinR,          OUTPUT); pinMode(speedPinL,          OUTPUT);
+  pinMode(RightMotorDirPin1B, OUTPUT); pinMode(RightMotorDirPin2B, OUTPUT);
+  pinMode(LeftMotorDirPin1B,  OUTPUT); pinMode(LeftMotorDirPin2B,  OUTPUT);
+  pinMode(speedPinRB,         OUTPUT); pinMode(speedPinLB,         OUTPUT);
+
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  digitalWrite(TRIG, LOW);
+
+  pinMode(TRIG_T, OUTPUT);
+  pinMode(ECHO_T, INPUT);
+  digitalWrite(TRIG_T, LOW);
+
+  pinMode(S1, INPUT); pinMode(S2, INPUT); pinMode(S3, INPUT);
+  pinMode(S4, INPUT); pinMode(S5, INPUT);
+  pinMode(ST1, INPUT); pinMode(ST2, INPUT); pinMode(ST3, INPUT);
+  pinMode(ST4, INPUT); pinMode(ST5, INPUT);
+
+  parar();
+
+  // --- BLOQUEO: ESPERA LA SEÑAL DEL MANDO (PYTHON) ---
+  Serial.println(F("Esperando señal del mando (X) por Serie..."));
+  while (true) {
+    if (Serial.available() > 0) {
+      char comando = Serial.read();
+      if (comando == 'X' || comando == 'x') {
+        Serial.println(F("Arrancando!"));
+        break; // Sale del bucle infinito
+      }
+    }
+  }
+  // ---------------------------------------------------
+
+  if (INICIO_RETROCESO) {
+    maniobraInicio();
+  }
+
+  tBuscarIni = millis();
+}
+
+// ************************************************************
+//  SECCION 5: MANIOBRA DE INICIO
+// ************************************************************
+
+void maniobraInicio() {
+  retroceder(); 
+  velocidad(VEL_INICIO_RETRO);
+  while (!hayLineaTrasera()) { delay(5); }
+
+  avanzar();
+  velocidad(255);
+  delay(TIEMPO_CONTRAMARCHA_RECTO); 
+  frenoMagnetico();
+  delay(50);         
+  parar();
+  delay(PAUSA_ESTABILIZACION);
+
+  avanzar();
+  velocidad(VEL_INICIO_AVANCE);
+  delay(TIEMPO_INICIO_AVANCE); 
+
+  retroceder();
+  velocidad(255);
+  delay(TIEMPO_CONTRAMARCHA_RECTO);
+  frenoMagnetico();
+  delay(50);
+  parar();
+  delay(PAUSA_ESTABILIZACION);  
+}
+
+// ************************************************************
+//  SECCION 6: LOOP PRINCIPAL
+// ************************************************************
+
+void loop() {
+  bool lineaFrente = hayLinea();
+  bool lineaAtras  = hayLineaTrasera();
+
+  switch (estado) {
+
+    case BUSCAR:
+      if (lineaFrente) {
+        retroceder(); 
+        velocidad(255);
+        delay(TIEMPO_CONTRAMARCHA_RECTO); 
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION);
+        
+        estado    = ESCAPAR_ATRAS;
+        tRetroIni = millis();
+        break;
+      }
+      
+      if (lineaAtras) {
+        girar(); 
+        velocidad(255);
+        delay(TIEMPO_CONTRAMARCHA_GIRO); 
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION);
+        
+        estado    = ESCAPAR_ADELANTE;
+        tRetroIni = millis();
+        break;
+      }
+
+      if (millis() - tBuscarIni >= TIMEOUT_BUSQUEDA) {
+        estado = ATACAR_FRONTAL;
+        break;
+      }
+
+      girar();
+      velocidad(VEL_BUSQUEDA);
+      delay(TIEMPO_GIRO);
+
+      {
+        frenoMagnetico(); 
+        delay(15);
+        parar();
+        delay(PAUSA_PRE_MEDIR);
+        
+        int dFrente = medirMediana(TRIG, ECHO);
+        if (dFrente > 0 && dFrente <= DIST_DETECCION) {
+          delay(DELAY_PRE_ATAQUE);
+          estado = ATACAR_FRONTAL;
+          break; 
+        }
+
+        int dAtras = medirMediana(TRIG_T, ECHO_T);
+        if (dAtras > 0 && dAtras <= DIST_DETECCION) {
+          delay(DELAY_PRE_ATAQUE);
+          estado = ATACAR_TRASERO;
+        }
+      }
+      break;
+
+    case ATACAR_FRONTAL:
+      if (lineaFrente) {
+        retroceder(); 
+        velocidad(255);
+        delay(TIEMPO_CONTRAMARCHA_RECTO); 
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION);
+        
+        estado    = ESCAPAR_ATRAS;
+        tRetroIni = millis();
+        break;
+      }
+
+      avanzar();
+      velocidad(VEL_ATAQUE);
+      break;
+
+    case ATACAR_TRASERO:
+      if (lineaAtras) {
+        girar(); 
+        velocidad(255);
+        delay(TIEMPO_CONTRAMARCHA_GIRO); 
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION);
+        
+        estado    = ESCAPAR_ADELANTE;
+        tRetroIni = millis();
+        break;
+      }
+
+      retroceder();
+      velocidad(VEL_ATAQUE);
+      break;
+
+    case ESCAPAR_ATRAS:
+      if (millis() - tRetroIni < (unsigned long)TIEMPO_RETROCESO) {
+        retroceder();
+        velocidad(VEL_RETROCESO);
+      } else {
+        avanzar();
+        velocidad(255);
+        delay(30);
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION); 
+        delay(DELAY_POST_RETRO); 
+        
+        medirMediana(TRIG, ECHO);     
+        medirMediana(TRIG_T, ECHO_T); 
+
+        estado = BUSCAR;
+        tBuscarIni = millis();  
+      }
+      break;
+
+    case ESCAPAR_ADELANTE:
+      if (millis() - tRetroIni < (unsigned long)TIEMPO_RETROCESO) {
+        avanzar();
+        velocidad(VEL_RETROCESO);
+      } else {
+        retroceder();
+        velocidad(255);
+        delay(30);
+        frenoMagnetico();
+        delay(50);
+        parar();
+        delay(PAUSA_ESTABILIZACION); 
+        delay(DELAY_POST_RETRO); 
+        
+        medirMediana(TRIG, ECHO);     
+        medirMediana(TRIG_T, ECHO_T); 
+
+        estado = BUSCAR;
+        tBuscarIni = millis();  
+      }
+      break;
+  }
+}
+
+// ************************************************************
+//  SECCION 7: ULTRASONIDO
+// ************************************************************
+
+int medir(int pinTrig, int pinEcho) {
+  digitalWrite(pinTrig, LOW);
+  delayMicroseconds(4);
+  digitalWrite(pinTrig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(pinTrig, LOW);
+  
+  long us = pulseIn(pinEcho, HIGH, US_TIMEOUT); 
+  
+  if (us == 0) return 999;        
+  int cm = (int)(us / 58);
+  if (cm < 2) return 999;          
+  return cm;
+}
+
+int medirMediana(int pinTrig, int pinEcho) {
+  int a = medir(pinTrig, pinEcho); delayMicroseconds(500);
+  int b = medir(pinTrig, pinEcho); delayMicroseconds(500);
+  int c = medir(pinTrig, pinEcho);
+  
+  if (a > b) { int t = a; a = b; b = t; }
+  if (b > c) { int t = b; b = c; c = t; }
+  if (a > b) { int t = a; a = b; b = t; }
+  
+  return b;  
+}
+
+// ************************************************************
+//  SECCION 8: SENSORES DE LINEA
+// ************************************************************
+
+bool hayLinea() {
+  return (!digitalRead(S1) || !digitalRead(S2) || !digitalRead(S3) ||
+          !digitalRead(S4) || !digitalRead(S5));
+}
+
+bool hayLineaTrasera() {
+  return (!digitalRead(ST1) || !digitalRead(ST2) || !digitalRead(ST3) ||
+          !digitalRead(ST4) || !digitalRead(ST5));
+}
+
+// ************************************************************
+//  SECCION 9: MOVIMIENTO Y FRENOS L298N
+// ************************************************************
+
+void velocidad(int v) {
+  analogWrite(speedPinL,  v); analogWrite(speedPinR,  v);
+  analogWrite(speedPinLB, v); analogWrite(speedPinRB, v);
+}
+
+void avanzar()      { FRf(); FLf(); RRf(); RLf(); }  
+void retroceder()   { FRb(); FLb(); RRb(); RLb(); }  
+void girar()        { FRb(); FLf(); RRb(); RLf(); }  
+void girarInverso() { FRf(); FLb(); RRf(); RLb(); } 
+
+void frenoMagnetico() {
+  digitalWrite(RightMotorDirPin1,  LOW); digitalWrite(RightMotorDirPin2,  LOW);
+  digitalWrite(LeftMotorDirPin1,   LOW); digitalWrite(LeftMotorDirPin2,   LOW);
+  digitalWrite(RightMotorDirPin1B, LOW); digitalWrite(RightMotorDirPin2B, LOW);
+  digitalWrite(LeftMotorDirPin1B,  LOW); digitalWrite(LeftMotorDirPin2B,  LOW);
+  velocidad(255); 
+}
+
+void parar() {
+  digitalWrite(RightMotorDirPin1,  LOW); digitalWrite(RightMotorDirPin2,  LOW);
+  digitalWrite(LeftMotorDirPin1,   LOW); digitalWrite(LeftMotorDirPin2,   LOW);
+  digitalWrite(RightMotorDirPin1B, LOW); digitalWrite(RightMotorDirPin2B, LOW);
+  digitalWrite(LeftMotorDirPin1B,  LOW); digitalWrite(LeftMotorDirPin2B,  LOW);
+  velocidad(0); 
+}
+
+void FRf() { digitalWrite(RightMotorDirPin1,  LOW);  digitalWrite(RightMotorDirPin2,  HIGH); }
+void FRb() { digitalWrite(RightMotorDirPin1,  HIGH); digitalWrite(RightMotorDirPin2,  LOW);  }
+void FLf() { digitalWrite(LeftMotorDirPin1,   LOW);  digitalWrite(LeftMotorDirPin2,   HIGH); }
+void FLb() { digitalWrite(LeftMotorDirPin1,   HIGH); digitalWrite(LeftMotorDirPin2,   LOW);  }
+void RRf() { digitalWrite(RightMotorDirPin1B, LOW);  digitalWrite(RightMotorDirPin2B, HIGH); }
+void RRb() { digitalWrite(RightMotorDirPin1B, HIGH); digitalWrite(RightMotorDirPin2B, LOW);  }
+void RLf() { digitalWrite(LeftMotorDirPin1B,  LOW);  digitalWrite(LeftMotorDirPin2B,  HIGH); }
+void RLb() { digitalWrite(LeftMotorDirPin1B,  HIGH); digitalWrite(LeftMotorDirPin2B,  LOW);  }
