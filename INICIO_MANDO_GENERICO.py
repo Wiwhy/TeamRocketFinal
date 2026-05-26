@@ -1,42 +1,43 @@
 import pygame
-import serial
+import socket
 import time
 import sys
 
-PUERTO = 'COM3'
-BAUDIOS = 9600
+ROBOT_IP = "192.168.4.1" 
+PORT = 8080
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 pygame.init()
 pygame.joystick.init()
 
 if pygame.joystick.get_count() == 0:
-    print("Conecta el mando de PS5 primero.")
+    print("¡Conecta el mando de PS5 primero!")
     sys.exit()
 
 mando = pygame.joystick.Joystick(0)
 mando.init()
 print(f"Mando detectado: {mando.get_name()}")
 
-try:
-    arduino = serial.Serial(PUERTO, BAUDIOS, timeout=1)
-    time.sleep(2) 
-    
-    print("\n[ SISTEMA BLOQUEADO ]")
-    print("Presiona la 'X' en el mando para iniciar el combate...")
+print("\n==================================================")
+print(" 🔴 SISTEMA BLOQUEADO (MODO ESPERA)")
+print(f" Red destino: {ROBOT_IP}:{PORT} (UDP)")
+print(" Presiona la 'X' (Cruz) en el mando para arrancar")
+print("==================================================\n")
 
+try:
     while True:
-        pygame.event.pump() 
+        pygame.event.pump()
         
-        # El botón 0 suele ser la X en mandos de PlayStation en Pygame
+        # El botón 0 suele ser la X en PS5 (Pygame)
         if mando.get_button(0):
-            print(">>> ¡ROBOT DESBLOQUEADO Y ARRANCANDO!")
-            arduino.write(b'X')
-            time.sleep(0.5) 
-            break 
+            # Enviamos el byte 'X' al Arduino
+            sock.sendto(b"X", (ROBOT_IP, PORT))
+            print("🟢 ¡COMANDO ENVIADO! El robot debería estar moviéndose.")
+            time.sleep(1) # Evita mandar 50 paquetes de golpe si dejas pulsado
+            break
             
-    arduino.close()
     pygame.quit()
 
-except Exception as e:
-    print(f"Error en el puerto serie: {e}")
+except KeyboardInterrupt:
+    print("\nLanzamiento cancelado.")
     pygame.quit()
