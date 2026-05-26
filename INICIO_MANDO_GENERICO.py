@@ -3,54 +3,40 @@ import serial
 import time
 import sys
 
-# ==========================================
-# CONFIGURACIÓN SERIAL (ARDUINO)
-# ==========================================
-PUERTO = 'COM3'  # <-- Cambia esto al puerto de tu Arduino
+PUERTO = 'COM3'
 BAUDIOS = 9600
 
-# ==========================================
-# INICIALIZACIÓN DEL MANDO
-# ==========================================
 pygame.init()
 pygame.joystick.init()
 
 if pygame.joystick.get_count() == 0:
-    print("¡Conecta el mando de PS5 primero!")
+    print("Conecta el mando de PS5 primero.")
     sys.exit()
 
 mando = pygame.joystick.Joystick(0)
 mando.init()
 print(f"Mando detectado: {mando.get_name()}")
 
-# ==========================================
-# BUCLE DE ESPERA Y LANZAMIENTO
-# ==========================================
 try:
     arduino = serial.Serial(PUERTO, BAUDIOS, timeout=1)
-    print(f"Conexión Serial establecida en {PUERTO}.")
-    time.sleep(2)  # Pausa obligatoria de reinicio del Arduino
+    time.sleep(2) 
     
-    print("\n==================================================")
-    print(" 🟢 SISTEMA LISTO ")
-    print(" Presiona la 'X' (Cruz) en tu mando de PS5 para arrancar")
-    print("==================================================\n")
+    print("\n[ SISTEMA BLOQUEADO ]")
+    print("Presiona la 'X' en el mando para iniciar el combate...")
 
     while True:
-        # Vaciamos la cola de eventos
         pygame.event.pump() 
-
-        # En Pygame, la "X" (Cruz) del PS5 suele ser el botón 0. 
-        # (Si estás en Linux/macOS a veces cambia al 1 o 2)
+        
+        # El botón 0 suele ser la X en mandos de PlayStation en Pygame
         if mando.get_button(0):
-            print("¡Arrancando robot!")
-            arduino.write(b'X')  # Envía la señal al Arduino
-            time.sleep(0.5)      # Evita el rebote (mandar múltiples 'X')
-            break                # Cierra el bucle tras disparar
+            print(">>> ¡ROBOT DESBLOQUEADO Y ARRANCANDO!")
+            arduino.write(b'X')
+            time.sleep(0.5) 
+            break 
             
     arduino.close()
     pygame.quit()
 
 except Exception as e:
-    print(f"Error de conexión: {e}")
+    print(f"Error en el puerto serie: {e}")
     pygame.quit()
