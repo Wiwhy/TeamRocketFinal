@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import messagebox
 import socket
 
-# --- CONFIGURACIÓN WI-FI ---
 ROBOT_IP = "192.168.4.1" 
 PORT = 8080
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -18,9 +17,8 @@ def guardar_cambios():
         r_p = float(entry_r_p.get())
         r_d = float(entry_r_d.get())
         vel = int(entry_vel.get()) 
-        t_barrido = int(entry_barrido.get()) # 🚨 NUEVO: Leemos el tiempo de barrido
+        t_barrido = int(entry_barrido.get()) 
         
-        # EL ORDEN IMPORTA: 'F', Velocidad, Barrido, P_Base, D_Base...
         mensaje = f"F,{vel},{t_barrido},{base_p},{base_d},{v_p},{v_d},{a_p},{a_d},{r_p},{r_d}\n"
         sock.sendto(mensaje.encode('utf-8'), (ROBOT_IP, PORT))
         lbl_estado.config(text=f"✅ Datos enviados! Vel: {vel} | Barrido: {t_barrido}ms", fg="green")
@@ -46,10 +44,10 @@ def girar_derecha_press(event):
 # ================= DISEÑO DE LA INTERFAZ =================
 root = tk.Tk()
 root.title("Fuzzy PID - MODO DIOS + MANDO")
-root.geometry("480x650") # Un pelín más ancho para que quepa bien
+root.geometry("480x650")
 root.configure(padx=10, pady=10)
 
-tk.Label(root, text="⚙️ TELEMETRÍA FUZZY", font=("Arial", 12, "bold")).pack()
+tk.Label(root, text=" TELEMETRÍA FUZZY", font=("Arial", 12, "bold")).pack()
 
 f_vel = tk.Frame(root)
 f_vel.pack(pady=5)
