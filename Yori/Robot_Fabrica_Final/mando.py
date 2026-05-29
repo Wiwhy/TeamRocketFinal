@@ -18,11 +18,11 @@ mando.init()
 print(f"Mando: {mando.get_name()} | Conexión establecida.")
 
 DEADZONE = 0.2 
-marchas       = [   80,   130,   200,   255  ]
-nombres       = ["LENTA", "BASE", "RÁPIDA", "TURBO"]
+marchas      = [   80,   130,   190,   255  ]
+nombres      = ["LENTA", "BASE", "RÁPIDA", "TURBO"]
 indice_marcha = 1  
 
-print(f"Iniciando en >> MODO {nombres[indice_marcha]} ({marchas[indice_marcha]}/255)")
+print(f"Iniciando en >> MODO {nombres[indice_marcha]}")
 
 estado_abrir_ant = False
 estado_cerrar_ant = False
@@ -31,20 +31,58 @@ try:
     while True:
         pygame.event.pump()
         
-        # =======================================================
-        # 1. LECTURA DE EJES (MODO CONDUCCIÓN ARCADE SEPARADA)
-        # =======================================================
-        
-        # JOYSTICK IZQUIERDO: Adelante y Atrás
-        y = -mando.get_axis(1)   
-        
-        # JOYSTICK DERECHO: Rotar (INVERTIDO CON EL SIGNO MENOS)
-        r = -mando.get_axis(2)    
-        
+        # --- LECTURA DE LOS JOYSTICKS (MECANUM) ---
+        x = mando.get_axis(0)  
+        y = -mando.get_axis(1) 
+        r = mando.get_axis(2)  
+
+        if abs(x) < DEADZONE: x = 0
         if abs(y) < DEADZONE: y = 0
         if abs(r) < DEADZONE: r = 0
 
-        # --- CAJA DE CAMBIOS ---
+        # --- LÓGICA DE LA PUERTA (CRUCETA) ---
+        btn_abrir = False; btn_cerrar = False
+        
+        try:
+            if mando.get_numhats() > 0:
+                cruceta = mando.get_hat(0)
+                if cruceta[1] == 1: btn_abrir = True    
+                elif cruceta[1] == -1: btn_cerrar = True 
+                
+            if mando.get_numbuttons() > 12:
+                if mando.get_button(11): btn_abrir = True
+                if mando.get_button(12): btn_cerrar = True
+        except:
+            pass
+            
+        if btn_abrir and not estado_abrir_ant:
+            sock.sendto(b"PUERTA_ABRIR\n", (ROBOT_IP, PORT))
+            estado_abrir_ant = True
+            time.sleep(0.1) 
+            continue 
+            
+        if btn_cerrar and not estado_cerrar_ant:
+            sock.sendto(b"PUERTA_CERRAR\n", (ROBOT_IP, PORT))
+            estado_cerrar_ant = True
+            time.sleep(0.1) 
+            continue 
+
+        estado_abrir_ant = btn_abrir
+        estado_cerrar_ant = btn_cerrar
+
+        # --- LÓGICA DEL SERVO (BOTONES) ---
+        try:
+            btn_x = mando.get_button(0)       
+            btn_circulo = mando.get_button(1) 
+        except:
+            btn_x = False
+            btn_circulo = False
+
+        estado_pinza = 0 
+        if btn_x and not btn_circulo: estado_pinza = 1  
+        elif btn_circulo and not btn_x: estado_pinza = -1 
+
+        # --- LÓGICA DE CAJA DE CAMBIOS ---
         try:
             l2_val = mando.get_axis(4) 
             r2_val = mando.get_axis(5) 
@@ -63,70 +101,26 @@ try:
             indice_marcha = nuevo_indice
             print(f">> CAMBIO A: MODO {nombres[indice_marcha]}")
 
-        # --- LÓGICA DE LA PUERTA ---
-        btn_abrir = False; btn_cerrar = False
-        teclas = pygame.key.get_pressed()
-        
-        if teclas[pygame.K_UP]: btn_abrir = True
-        if teclas[pygame.K_DOWN]: btn_cerrar = True
-        
-        try:
-            if mando.get_numhats() > 0:
-                cruceta = mando.get_hat(0)
-                if cruceta[1] == 1: btn_abrir = True    
-                elif cruceta[1] == -1: btn_cerrar = True 
-                
-            if mando.get_numbuttons() > 12:
-                if mando.get_button(11): btn_abrir = True
-                if mando.get_button(12): btn_cerrar = True
-        except:
-            pass
-            
-        if btn_abrir and not estado_abrir_ant:
-            sock.sendto(b"PUERTA_ABRIR\n", (ROBOT_IP, PORT))
-            print("📡 COMANDO ENVIADO: ¡ABRIR barrera!")
-            estado_abrir_ant = True
-            time.sleep(0.1) 
-            continue 
-            
-        if btn_cerrar and not estado_cerrar_ant:
-            sock.sendto(b"PUERTA_CERRAR\n", (ROBOT_IP, PORT))
-            print("📡 COMANDO ENVIADO: ¡CERRAR barrera!")
-            estado_cerrar_ant = True
-            time.sleep(0.1) 
-            continue 
-
-        estado_abrir_ant = btn_abrir
-        estado_cerrar_ant = btn_cerrar
-
-        # --- LÓGICA DE PINZA ---
-        try:
-            btn_x = mando.get_button(0)       
-            btn_circulo = mando.get_button(1) 
-        except:
-            btn_x = False; btn_circulo = False
-
-        estado_pinza = 0 
-        if btn_x and not btn_circulo: estado_pinza = 1  
-        elif btn_circulo and not btn_x: estado_pinza = -1 
-
-        # =======================================================
-        # 2. CINEMÁTICA MATEMÁTICA
-        # =======================================================
+        # --- MATEMÁTICAS MECANUM (4 MOTORES) ---
         velocidad_actual = marchas[indice_marcha]
-        
-        val_izq = y + r
-        val_der = y - r
-        max_val = max(abs(val_izq), abs(val_der), 1.0)
-        
-        motor_izq = int((val_izq / max_val) * velocidad_actual)
-        motor_der = int((val_der / max_val) * velocidad_actual)
 
-        # Enviar paquete (Izquierda, Derecha, Cero, Cero, Pinza)
-        paquete = f"{motor_izq},{motor_der},0,0,{estado_pinza}\n".encode()
+        front_left  = y + x + r
+        front_right = y - x - r
+        back_left   = y - x + r
+        back_right  = y + x - r
+
+        max_val = max(abs(front_left), abs(front_right), abs(back_left), abs(back_right), 1.0)
+        
+        fl = int((front_left / max_val) * velocidad_actual)
+        fr = int((front_right / max_val) * velocidad_actual)
+        bl = int((back_left / max_val) * velocidad_actual)
+        br = int((back_right / max_val) * velocidad_actual)
+
+        # Enviar 5 valores: Rueda1, Rueda2, Rueda3, Rueda4, Servo
+        paquete = f"{fl},{fr},{bl},{br},{estado_pinza}\n".encode()
         sock.sendto(paquete, (ROBOT_IP, PORT))
+        
         time.sleep(0.02) 
 
 except KeyboardInterrupt:
-    print("\nConexión finalizada.")
     pygame.quit()

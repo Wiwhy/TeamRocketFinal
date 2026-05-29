@@ -1,5 +1,6 @@
 #include "WiFiEsp.h"
 #include "WiFiEspUdp.h"
+#include <Servo.h>
 
 char ssid[] = "ROBOT_COMPETICION"; 
 char pass[] = "12345678"; 
@@ -10,47 +11,60 @@ WiFiEspUDP Udp;
 unsigned int puertoPuerta = 8081;
 
 // ==========================================
-// PINES MODO TANQUE (Faja de cables Derecha - M_B)
+// PINES DE LAS 4 RUEDAS (MECANUM)
 // ==========================================
-// LADO IZQUIERDO (Conectado a M_B IN1, IN2, ENA)
-#define MotorIzq_Dir1 22
-#define MotorIzq_Dir2 24
-#define MotorIzq_PWM  9
+#define speedPinR 9
+#define RightMotorDirPin1  22
+#define RightMotorDirPin2  24
 
-// LADO DERECHO (Conectado a M_B IN3, IN4, ENB)
-#define MotorDer_Dir1 26
-#define MotorDer_Dir2 28
-#define MotorDer_PWM  10
+#define LeftMotorDirPin1  26
+#define LeftMotorDirPin2  28
+#define speedPinL 10
+
+#define speedPinRB 11
+#define RightMotorDirPin1B  5
+#define RightMotorDirPin2B 6
+
+#define LeftMotorDirPin1B 7
+#define LeftMotorDirPin2B 8
+#define speedPinLB 12
 
 // ==========================================
-// PINES DE LA PINZA (Faja de cables Izquierda - M_A)
+// CONFIGURACIÓN DEL SERVO (GANCHO)
 // ==========================================
-// PINZA (Conectado a M_A IN1, IN2, ENA)
-#define PinzaDir1 5
-#define PinzaDir2 6
-#define PinzaPWM 11
-#define VELOCIDAD_PINZA 150 
+#define PIN_SERVO 4
+Servo servoGancho;
+int angulo_gancho = 90;
 
-int cur_izq = 0, target_izq = 0;
-int cur_der = 0, target_der = 0;
-int basura1 = 0, basura2 = 0; // Para absorber los dos ceros del Python
-int target_pinza = 0;
+// ==========================================
+// VARIABLES DE DATOS
+// ==========================================
+int cur_fl = 0, target_fl = 0;
+int cur_fr = 0, target_fr = 0;
+int cur_bl = 0, target_bl = 0;
+int cur_br = 0, target_br = 0;
+
+int target_pinza = 0; 
 unsigned long last_millis = 0;
 
 void setup() {
   Serial.begin(115200);   
   Serial1.begin(115200); 
 
-  pinMode(MotorIzq_Dir1, OUTPUT); pinMode(MotorIzq_Dir2, OUTPUT); pinMode(MotorIzq_PWM, OUTPUT);
-  pinMode(MotorDer_Dir1, OUTPUT); pinMode(MotorDer_Dir2, OUTPUT); pinMode(MotorDer_PWM, OUTPUT);
-  pinMode(PinzaDir1, OUTPUT); pinMode(PinzaDir2, OUTPUT); pinMode(PinzaPWM, OUTPUT);
+  pinMode(RightMotorDirPin1, OUTPUT); pinMode(RightMotorDirPin2, OUTPUT); pinMode(speedPinL, OUTPUT);
+  pinMode(LeftMotorDirPin1, OUTPUT); pinMode(LeftMotorDirPin2, OUTPUT); pinMode(speedPinR, OUTPUT);
+  pinMode(RightMotorDirPin1B, OUTPUT); pinMode(RightMotorDirPin2B, OUTPUT); pinMode(speedPinLB, OUTPUT);
+  pinMode(LeftMotorDirPin1B, OUTPUT); pinMode(LeftMotorDirPin2B, OUTPUT); pinMode(speedPinRB, OUTPUT);
 
-  apagar_todo();
+  apagar_motores();
+
+  servoGancho.attach(PIN_SERVO);
+  servoGancho.write(angulo_gancho);
 
   WiFi.init(&Serial1);
   WiFi.beginAP(ssid, 10, pass, ENC_TYPE_WPA2_PSK);
   Udp.begin(localPort);
-  Serial.println(F("¡Modo Tanque M_B + Pinza M_A + Puerta listo!"));
+  Serial.println("¡Mecanum + Servo + Puerta listos!");
 }
 
 void loop() {
@@ -60,30 +74,32 @@ void loop() {
     int len = Udp.read(packetBuffer, 63);
     if (len > 0) packetBuffer[len] = '\0';
     
-    // ENRUTAMIENTO DE LA PUERTA (SIN ATASCOS)
+    // FILTRO DE LA PUERTA
     if (strncmp(packetBuffer, "PUERTA_ABRIR", 12) == 0) {
-      Serial.println(F(">>> Orden ABRIR recibida. Disparando a la red..."));
       disparoAbanico("ABRIR");
     } 
     else if (strncmp(packetBuffer, "PUERTA_CERRAR", 13) == 0) {
-      Serial.println(F(">>> Orden CERRAR recibida. Disparando a la red..."));
       disparoAbanico("CERRAR");
     }
-    // LECTURA DE TELEMETRÍA (TANQUE + PINZA)
+    // LECTURA DE TELEMETRÍA (MECANUM + SERVO)
     else {
-      sscanf(packetBuffer, "%d,%d,%d,%d,%d", &target_izq, &target_der, &basura1, &basura2, &target_pinza);
+      sscanf(packetBuffer, "%d,%d,%d,%d,%d", &target_fl, &target_fr, &target_bl, &target_br, &target_pinza);
     }
   }
 
-  // FÍSICA Y MOVIMIENTO
+  // BUCLE FÍSICO (10 ms)
   if (millis() - last_millis >= 10) { 
     last_millis = millis();
     
-    suavizar_rueda(cur_izq, target_izq);
-    suavizar_rueda(cur_der, target_der);
+    suavizar_rueda(cur_fl, target_fl);
+    suavizar_rueda(cur_fr, target_fr);
+    suavizar_rueda(cur_bl, target_bl);
+    suavizar_rueda(cur_br, target_br);
 
-    aplicarMotorTanque(1, cur_izq); 
-    aplicarMotorTanque(2, cur_der); 
+    aplicarMotor(1, cur_fl); 
+    aplicarMotor(2, cur_fr); 
+    aplicarMotor(3, cur_bl); 
+    aplicarMotor(4, cur_br); 
     
     aplicarPinza(target_pinza);
   }
@@ -102,35 +118,58 @@ void disparoAbanico(const char* mensaje) {
 
 // =========================================================
 void aplicarPinza(int estado) {
-  if (estado == 1) { digitalWrite(PinzaDir1, HIGH); digitalWrite(PinzaDir2, LOW); analogWrite(PinzaPWM, VELOCIDAD_PINZA); } 
-  else if (estado == -1) { digitalWrite(PinzaDir1, LOW); digitalWrite(PinzaDir2, HIGH); analogWrite(PinzaPWM, VELOCIDAD_PINZA); } 
-  else { digitalWrite(PinzaDir1, LOW); digitalWrite(PinzaDir2, LOW); analogWrite(PinzaPWM, 0); }
+  if (estado == 1) { 
+    angulo_gancho += 3; 
+    if (angulo_gancho > 180) angulo_gancho = 180;
+  } 
+  else if (estado == -1) { 
+    angulo_gancho -= 3; 
+    if (angulo_gancho < 0) angulo_gancho = 0;
+  }
+  servoGancho.write(angulo_gancho);
 }
 
 void suavizar_rueda(int &current, int target) {
   if (target == 0 || (current > 0 && target < 0) || (current < 0 && target > 0)) { current = target; return; }
   if (abs(target) < abs(current)) { current = target; return; }
-  if (current < target) { current += 8; if (current > target) current = target; } 
-  else if (current > target) { current -= 8; if (current < target) current = target; }
+  
+  if (current < target) {
+    current += 8; if (current > target) current = target;
+  } else if (current > target) {
+    current -= 8; if (current < target) current = target;
+  }
 }
 
-void aplicarMotorTanque(int lado, int velocidad) {
+void aplicarMotor(int motor, int velocidad) {
   bool hacia_adelante = (velocidad >= 0);
   int pwm = abs(velocidad);
   if (pwm > 255) pwm = 255;
 
-  if (lado == 1) { // LADO IZQUIERDO
-    digitalWrite(MotorIzq_Dir1, hacia_adelante ? LOW : HIGH);
-    digitalWrite(MotorIzq_Dir2, hacia_adelante ? HIGH : LOW);
-    analogWrite(MotorIzq_PWM, pwm);
-  } else { // LADO DERECHO
-    digitalWrite(MotorDer_Dir1, hacia_adelante ? LOW : HIGH);
-    digitalWrite(MotorDer_Dir2, hacia_adelante ? HIGH : LOW);
-    analogWrite(MotorDer_PWM, pwm);
+  switch(motor) {
+    case 1: 
+      digitalWrite(LeftMotorDirPin1, hacia_adelante ? LOW : HIGH);
+      digitalWrite(LeftMotorDirPin2, hacia_adelante ? HIGH : LOW);
+      analogWrite(speedPinL, pwm);
+      break;
+    case 2: 
+      digitalWrite(RightMotorDirPin1, hacia_adelante ? LOW : HIGH);
+      digitalWrite(RightMotorDirPin2, hacia_adelante ? HIGH : LOW);
+      analogWrite(speedPinR, pwm);
+      break;
+    case 3: 
+      digitalWrite(LeftMotorDirPin1B, hacia_adelante ? LOW : HIGH);
+      digitalWrite(LeftMotorDirPin2B, hacia_adelante ? HIGH : LOW);
+      analogWrite(speedPinLB, pwm);
+      break;
+    case 4: 
+      digitalWrite(RightMotorDirPin1B, hacia_adelante ? LOW : HIGH);
+      digitalWrite(RightMotorDirPin2B, hacia_adelante ? HIGH : LOW);
+      analogWrite(speedPinRB, pwm);
+      break;
   }
 }
 
-void apagar_todo() {
-  target_izq = 0; target_der = 0; target_pinza = 0;
-  aplicarMotorTanque(1, 0); aplicarMotorTanque(2, 0); aplicarPinza(0);
+void apagar_motores() {
+  target_fl = 0; target_fr = 0; target_bl = 0; target_br = 0;
+  aplicarMotor(1, 0); aplicarMotor(2, 0); aplicarMotor(3, 0); aplicarMotor(4, 0);
 }
